@@ -1,0 +1,83 @@
+name: Phase 0 CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - phase0-bootstrap
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build-desktop:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+            artifact_name: ScreenPartner-windows-x64
+            artifact_path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+          - name: macOS ARM64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            bundles: dmg
+            artifact_name: ScreenPartner-macos-arm64
+            artifact_path: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Install Tauri CLI
+        run: npm install --no-audit --no-fund
+
+      - name: Generate desktop icons
+        run: npm run icon
+
+      - name: Rust format check
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }}
+
+      - name: Rust clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }} -- -D warnings
+
+      - name: Build Tauri bundle
+        run: npm run tauri build -- --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_path }}
+          if-no-files-found: error
