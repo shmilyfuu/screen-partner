@@ -1,0 +1,103 @@
+:root {
+  font-family: system-ui, sans-serif;
+  background: transparent;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+  user-select: none;
+}
+
+body {
+  display: grid;
+  place-items: center;
+}
+
+.pet-stage {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: end center;
+  background: transparent;
+}
+
+.placeholder-pet {
+  position: relative;
+  width: 154px;
+  height: 174px;
+  margin-bottom: 14px;
+  filter: drop-shadow(0 8px 10px rgb(0 0 0 / 18%));
+}
+
+.face {
+  position: absolute;
+  inset: 32px 11px 8px;
+  border: 6px solid rgb(36 40 52);
+  border-radius: 44% 44% 42% 42%;
+  background: rgb(241 238 226);
+}
+
+.ear {
+  position: absolute;
+  top: 17px;
+  width: 47px;
+  height: 61px;
+  border: 6px solid rgb(36 40 52);
+  background: rgb(241 238 226);
+  transform: rotate(45deg);
+}
+
+.ear-left {
+  left: 18px;
+  border-radius: 12px 28px 12px 28px;
+}
+
+.ear-right {
+  right: 18px;
+  border-radius: 28px 12px 28px 12px;
+}
+
+.eye {
+  position: absolute;
+  top: 58px;
+  width: 12px;
+  height: 17px;
+  border-radius: 50%;
+  background: rgb(36 40 52);
+}
+
+.eye-left {
+  left: 34px;
+}
+
+.eye-right {
+  right: 34px;
+}
+
+.mouth {
+  position: absolute;
+  left: 50%;
+  top: 91px;
+  width: 28px;
+  height: 14px;
+  border-bottom: 5px solid rgb(36 40 52);
+  border-radius: 50%;
+  transform: translateX(-50%);
+}
+
+.phase-badge {
+  position: absolute;
+  right: 2px;
+  bottom: 0;
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: rgb(36 40 52 / 92%);
+  color: white;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
