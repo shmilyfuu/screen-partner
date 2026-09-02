@@ -15,13 +15,7 @@ fn recall_main_window(app: &tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            let recall = MenuItem::with_id(
-                app,
-                "recall",
-                "显示/召回宠物",
-                true,
-                None::<&str>,
-            )?;
+            let recall = MenuItem::with_id(app, "recall", "显示/召回宠物", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出 Screen Partner", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&recall, &quit])?;
 
