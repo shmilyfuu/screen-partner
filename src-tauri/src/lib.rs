@@ -1,48 +1,55 @@
-#[cfg(windows)]
-use tauri::Manager;
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Manager,
+};
 
-#[cfg(windows)]
-fn start_topmost_reassertion(window: tauri::WebviewWindow) -> tauri::Result<()> {
-    use std::time::Duration;
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    };
-
-    let hwnd = window.hwnd()?;
-    let raw_hwnd = hwnd.0 as isize;
-
-    std::thread::spawn(move || {
-        let hwnd = HWND(raw_hwnd as *mut std::ffi::c_void);
-
-        loop {
-            unsafe {
-                let _ = SetWindowPos(
-                    hwnd,
-                    Some(HWND_TOPMOST),
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                );
-            }
-
-            std::thread::sleep(Duration::from_millis(1000));
-        }
-    });
-
-    Ok(())
+fn recall_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.center();
+    }
 }
 
 pub fn run() {
     tauri::Builder::default()
-        .setup(|_app| {
-            #[cfg(windows)]
-            if let Some(window) = _app.get_webview_window("main") {
-                start_topmost_reassertion(window)?;
+        .setup(|app| {
+            let recall = MenuItem::with_id(
+                app,
+                "recall",
+                "显示/召回宠物",
+                true,
+                None::<&str>,
+            )?;
+            let quit = MenuItem::with_id(app, "quit", "退出 Screen Partner", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&recall, &quit])?;
+
+            let mut tray = TrayIconBuilder::with_id("main-tray")
+                .tooltip("Screen Partner")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "recall" => recall_main_window(app),
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        recall_main_window(tray.app_handle());
+                    }
+                });
+
+            if let Some(icon) = app.default_window_icon() {
+                tray = tray.icon(icon.clone());
             }
 
+            tray.build(app)?;
             Ok(())
         })
         .run(tauri::generate_context!())
