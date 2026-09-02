@@ -31,7 +31,16 @@ body {
   width: 154px;
   height: 174px;
   margin-bottom: 14px;
+  cursor: grab;
   filter: drop-shadow(0 8px 10px rgb(0 0 0 / 18%));
+}
+
+.placeholder-pet:active {
+  cursor: grabbing;
+}
+
+.placeholder-pet * {
+  pointer-events: none;
 }
 
 .face {
