@@ -89,9 +89,7 @@ fn saved_position_is_visible(window: &tauri::WebviewWindow, position: WindowSett
     })
 }
 
-fn default_main_screen_position(
-    window: &tauri::WebviewWindow,
-) -> Option<PhysicalPosition<i32>> {
+fn default_main_screen_position(window: &tauri::WebviewWindow) -> Option<PhysicalPosition<i32>> {
     let monitor = window
         .primary_monitor()
         .ok()
@@ -105,10 +103,11 @@ fn default_main_screen_position(
     let margin_right = (DEFAULT_MARGIN_RIGHT * scale_factor).round() as i32;
     let margin_bottom = (DEFAULT_MARGIN_BOTTOM * scale_factor).round() as i32;
 
-    let x = (monitor_position.x + monitor_size.width as i32 - window_size.width as i32
-        - margin_right)
-        .max(monitor_position.x);
-    let y = (monitor_position.y + monitor_size.height as i32 - window_size.height as i32
+    let x =
+        (monitor_position.x + monitor_size.width as i32 - window_size.width as i32 - margin_right)
+            .max(monitor_position.x);
+    let y = (monitor_position.y + monitor_size.height as i32
+        - window_size.height as i32
         - margin_bottom)
         .max(monitor_position.y);
 
@@ -118,7 +117,8 @@ fn default_main_screen_position(
 fn restore_or_place_main_window(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
     if let Some(saved) = load_window_position(app) {
         if saved_position_is_visible(window, saved) {
-            let _ = window.set_position(Position::Physical(PhysicalPosition::new(saved.x, saved.y)));
+            let _ =
+                window.set_position(Position::Physical(PhysicalPosition::new(saved.x, saved.y)));
             return;
         }
     }
@@ -171,8 +171,7 @@ pub fn run() {
             }
 
             let show = MenuItem::with_id(app, "show", "显示宠物", true, None::<&str>)?;
-            let recall =
-                MenuItem::with_id(app, "recall", "召回到主屏幕", true, None::<&str>)?;
+            let recall = MenuItem::with_id(app, "recall", "召回到主屏幕", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出 Screen Partner", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &recall, &quit])?;
 
