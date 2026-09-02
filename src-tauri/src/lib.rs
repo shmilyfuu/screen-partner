@@ -37,9 +37,9 @@ fn start_topmost_reassertion(window: tauri::WebviewWindow) -> tauri::Result<()> 
 
 pub fn run() {
     tauri::Builder::default()
-        .setup(|app| {
+        .setup(|_app| {
             #[cfg(windows)]
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = _app.get_webview_window("main") {
                 start_topmost_reassertion(window)?;
             }
 
