@@ -24,13 +24,11 @@ jobs:
           - name: Windows x64
             runner: windows-latest
             target: x86_64-pc-windows-msvc
-            bundles: nsis
-            artifact_name: ScreenPartner-windows-x64
-            artifact_path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            artifact_name: ScreenPartner-windows-x64-portable
+            artifact_path: artifacts/windows/ScreenPartner.exe
           - name: macOS ARM64
             runner: macos-latest
             target: aarch64-apple-darwin
-            bundles: dmg
             artifact_name: ScreenPartner-macos-arm64
             artifact_path: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
 
@@ -70,10 +68,19 @@ jobs:
       - name: Rust clippy
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }} -- -D warnings
 
-      - name: Build Tauri bundle
-        run: npm run tauri build -- --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+      - name: Build Windows portable executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo build --manifest-path src-tauri/Cargo.toml --release --target ${{ matrix.target }}
+          New-Item -ItemType Directory -Force artifacts/windows | Out-Null
+          Copy-Item "src-tauri/target/${{ matrix.target }}/release/screen-partner.exe" "artifacts/windows/ScreenPartner.exe"
+
+      - name: Build macOS DMG
+        if: runner.os == 'macOS'
+        run: npm run tauri build -- --target ${{ matrix.target }} --bundles dmg
         env:
-          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
+          APPLE_SIGNING_IDENTITY: '-'
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
