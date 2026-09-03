@@ -1,3 +1,6 @@
+mod gpu;
+#[cfg(target_os = "macos")]
+mod macos_window;
 mod telemetry;
 
 use serde::{Deserialize, Serialize};
@@ -180,6 +183,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![development_ui_enabled])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
+                #[cfg(target_os = "macos")]
+                if let Err(error) = macos_window::enable_unrestricted_drag(&window) {
+                    eprintln!("[screen-partner] failed to enable unrestricted macOS drag: {error}");
+                }
+
                 restore_or_place_main_window(app.handle(), &window);
                 let _ = window.show();
             }
