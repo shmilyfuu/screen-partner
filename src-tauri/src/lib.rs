@@ -152,6 +152,12 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+fn hide_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+}
+
 fn recall_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         if let Some(position) = default_main_screen_position(&window) {
@@ -171,9 +177,10 @@ pub fn run() {
             }
 
             let show = MenuItem::with_id(app, "show", "显示宠物", true, None::<&str>)?;
+            let hide = MenuItem::with_id(app, "hide", "隐藏宠物", true, None::<&str>)?;
             let recall = MenuItem::with_id(app, "recall", "召回到主屏幕", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出 Screen Partner", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &recall, &quit])?;
+            let menu = Menu::with_items(app, &[&show, &hide, &recall, &quit])?;
 
             let mut tray = TrayIconBuilder::with_id("main-tray")
                 .tooltip("Screen Partner")
@@ -181,6 +188,7 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show" => show_main_window(app),
+                    "hide" => hide_main_window(app),
                     "recall" => recall_main_window(app),
                     "quit" => {
                         save_current_main_window_position(app);
