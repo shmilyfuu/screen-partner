@@ -36,10 +36,10 @@ impl TelemetrySampler {
         system.refresh_memory();
 
         let mut disks = Disks::new_with_refreshed_list();
-        disks.refresh();
+        disks.refresh(true);
 
         let mut networks = Networks::new_with_refreshed_list();
-        networks.refresh();
+        networks.refresh(true);
 
         Self {
             system,
@@ -52,8 +52,8 @@ impl TelemetrySampler {
     pub fn sample(&mut self) -> SystemMetrics {
         self.system.refresh_cpu_usage();
         self.system.refresh_memory();
-        self.disks.refresh();
-        self.networks.refresh();
+        self.disks.refresh(true);
+        self.networks.refresh(true);
 
         let sampled_at = Instant::now();
         let elapsed = sampled_at.saturating_duration_since(self.last_sampled_at);
