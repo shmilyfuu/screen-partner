@@ -2,11 +2,7 @@ mod gpu;
 mod telemetry;
 
 use serde::{Deserialize, Serialize};
-use std::{
-    fs,
-    path::PathBuf,
-    sync::Mutex,
-};
+use std::{fs, path::PathBuf, sync::Mutex};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -110,7 +106,9 @@ fn update_window_drag(
         .get_webview_window("main")
         .ok_or_else(|| "main window is unavailable".to_string())?;
     window
-        .set_position(Position::Physical(PhysicalPosition::new(target_x, target_y)))
+        .set_position(Position::Physical(PhysicalPosition::new(
+            target_x, target_y,
+        )))
         .map_err(|error| format!("failed to move window: {error}"))
 }
 
