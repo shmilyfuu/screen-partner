@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - phase0-bootstrap
+      - phase0b-animation-core
   pull_request:
     branches:
       - main
@@ -55,6 +56,9 @@ jobs:
 
       - name: Install Tauri CLI
         run: npm install --no-audit --no-fund
+
+      - name: JavaScript tests
+        run: npm test
 
       - name: Generate desktop icons
         run: npm run icon
