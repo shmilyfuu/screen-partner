@@ -8,7 +8,6 @@ on:
       - phase0-bootstrap
       - phase0b-animation-core
       - phase1-sprite-renderer
-      - phase3-telemetry
   pull_request:
     branches:
       - main
