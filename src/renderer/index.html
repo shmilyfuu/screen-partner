@@ -21,21 +21,27 @@
         Pet resource unavailable
       </div>
 
-      <label class="debug-controls" data-debug-controls hidden>
-        <span>State</span>
-        <select data-debug-state>
-          <option value="auto">Auto</option>
-          <option value="idle">idle</option>
-          <option value="running-right">running-right</option>
-          <option value="running-left">running-left</option>
-          <option value="waving">waving</option>
-          <option value="jumping">jumping</option>
-          <option value="failed">failed</option>
-          <option value="waiting">waiting</option>
-          <option value="running">running</option>
-          <option value="review">review</option>
-        </select>
-      </label>
+      <div class="debug-controls" data-debug-controls hidden>
+        <output class="debug-metrics" data-debug-metrics>
+          CPU -- · RAM --
+          D --/-- · N --/--
+        </output>
+        <label class="debug-state-control">
+          <span>State</span>
+          <select data-debug-state>
+            <option value="auto">Auto</option>
+            <option value="idle">idle</option>
+            <option value="running-right">running-right</option>
+            <option value="running-left">running-left</option>
+            <option value="waving">waving</option>
+            <option value="jumping">jumping</option>
+            <option value="failed">failed</option>
+            <option value="waiting">waiting</option>
+            <option value="running">running</option>
+            <option value="review">review</option>
+          </select>
+        </label>
+      </div>
     </main>
 
     <script type="module" src="./main.js"></script>
