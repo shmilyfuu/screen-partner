@@ -24,6 +24,7 @@ let animationPlayer = null;
 let animationFrameRequest = null;
 let unlistenSystemMetrics = null;
 let latestSystemMetrics = null;
+let dragSession = null;
 
 function showPetError(error) {
   renderer.clear();
@@ -118,6 +119,133 @@ async function subscribeSystemMetrics() {
   }
 }
 
+function dragInvoke(command, payload = {}) {
+  const invoke = globalThis.__TAURI__?.core?.invoke;
+  if (typeof invoke !== "function") {
+    return Promise.reject(new Error("Tauri invoke is unavailable"));
+  }
+  return invoke(command, payload);
+}
+
+async function pumpDragUpdates(session) {
+  if (!session.ready || session.pumping) {
+    return;
+  }
+
+  session.pumping = true;
+  try {
+    while (session.pendingPoint) {
+      const point = session.pendingPoint;
+      session.pendingPoint = null;
+      await dragInvoke("update_window_drag", {
+        screenX: point.screenX,
+        screenY: point.screenY,
+      });
+    }
+  } catch (error) {
+    console.warn("[screen-partner] window drag update failed", error);
+    session.endRequested = true;
+  } finally {
+    session.pumping = false;
+  }
+
+  if (session.endRequested) {
+    try {
+      await dragInvoke("end_window_drag");
+    } catch (error) {
+      console.warn("[screen-partner] window drag end failed", error);
+    }
+
+    if (dragSession === session) {
+      dragSession = null;
+    }
+    return;
+  }
+
+  if (session.pendingPoint) {
+    pumpDragUpdates(session);
+  }
+}
+
+async function beginPetDrag(event) {
+  if (event.button !== 0 || dragSession) {
+    return;
+  }
+
+  event.preventDefault();
+  const session = {
+    pointerId: event.pointerId,
+    ready: false,
+    pumping: false,
+    pendingPoint: null,
+    endRequested: false,
+  };
+  dragSession = session;
+
+  try {
+    spriteElement.setPointerCapture(event.pointerId);
+  } catch {
+    // Pointer capture can be unavailable on some WebView builds; dragging still works while events arrive.
+  }
+
+  try {
+    await dragInvoke("begin_window_drag", {
+      screenX: event.screenX,
+      screenY: event.screenY,
+    });
+    session.ready = true;
+    await pumpDragUpdates(session);
+  } catch (error) {
+    console.warn("[screen-partner] window drag start failed", error);
+    session.endRequested = true;
+    session.ready = true;
+    await pumpDragUpdates(session);
+  }
+}
+
+function updatePetDrag(event) {
+  const session = dragSession;
+  if (!session || event.pointerId !== session.pointerId) {
+    return;
+  }
+
+  event.preventDefault();
+  session.pendingPoint = {
+    screenX: event.screenX,
+    screenY: event.screenY,
+  };
+  pumpDragUpdates(session);
+}
+
+function endPetDrag(event) {
+  const session = dragSession;
+  if (!session || event.pointerId !== session.pointerId) {
+    return;
+  }
+
+  event.preventDefault();
+  session.pendingPoint = {
+    screenX: event.screenX,
+    screenY: event.screenY,
+  };
+  session.endRequested = true;
+
+  try {
+    spriteElement.releasePointerCapture(event.pointerId);
+  } catch {
+    // Capture may already have been released by the WebView.
+  }
+
+  pumpDragUpdates(session);
+}
+
+function installPetDragging() {
+  spriteElement.addEventListener("pointerdown", beginPetDrag);
+  spriteElement.addEventListener("pointermove", updatePetDrag);
+  spriteElement.addEventListener("pointerup", endPetDrag);
+  spriteElement.addEventListener("pointercancel", endPetDrag);
+}
+
 async function developmentUiEnabled() {
   try {
     return Boolean(
@@ -143,6 +271,7 @@ async function initialize() {
     animationPlayer.loadPet(pet);
     animationPlayer.start("idle");
     showPet();
+    installPetDragging();
 
     await subscribeSystemMetrics();
 
@@ -178,6 +307,11 @@ window.addEventListener("beforeunload", () => {
 
   if (typeof unlistenSystemMetrics === "function") {
     unlistenSystemMetrics();
+  }
+
+  if (dragSession) {
+    dragSession.endRequested = true;
+    pumpDragUpdates(dragSession);
   }
 });
 
