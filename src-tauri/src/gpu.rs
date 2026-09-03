@@ -332,7 +332,7 @@ mod platform {
         }
 
         let slot_size = std::mem::size_of::<u64>();
-        let slot_count = (buffer_size as usize + slot_size - 1) / slot_size;
+        let slot_count = (buffer_size as usize).div_ceil(slot_size);
         let mut buffer = vec![0_u64; slot_count];
         let status = PdhGetFormattedCounterArrayW(
             counter,
