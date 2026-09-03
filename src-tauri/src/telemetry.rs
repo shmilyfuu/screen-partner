@@ -72,11 +72,7 @@ impl TelemetrySampler {
             .map(|disk| disk.usage().written_bytes)
             .sum();
         let network_rx_bytes = self.networks.values().map(|data| data.received()).sum();
-        let network_tx_bytes = self
-            .networks
-            .values()
-            .map(|data| data.transmitted())
-            .sum();
+        let network_tx_bytes = self.networks.values().map(|data| data.transmitted()).sum();
 
         SystemMetrics {
             timestamp_ms: unix_timestamp_ms(),
