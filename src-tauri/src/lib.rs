@@ -1,3 +1,5 @@
+mod telemetry;
+
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf};
 use tauri::{
@@ -181,6 +183,8 @@ pub fn run() {
                 restore_or_place_main_window(app.handle(), &window);
                 let _ = window.show();
             }
+
+            telemetry::start_telemetry(app.handle().clone());
 
             let show = MenuItem::with_id(app, "show", "显示宠物", true, None::<&str>)?;
             let hide = MenuItem::with_id(app, "hide", "隐藏宠物", true, None::<&str>)?;
