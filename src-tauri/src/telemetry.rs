@@ -71,11 +71,7 @@ impl TelemetrySampler {
             .iter()
             .map(|disk| disk.usage().written_bytes)
             .sum();
-        let network_rx_bytes = self
-            .networks
-            .iter()
-            .map(|(_, data)| data.received())
-            .sum();
+        let network_rx_bytes = self.networks.iter().map(|(_, data)| data.received()).sum();
         let network_tx_bytes = self
             .networks
             .iter()
