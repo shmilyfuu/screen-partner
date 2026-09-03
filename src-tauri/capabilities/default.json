@@ -3,5 +3,8 @@
   "identifier": "default",
   "description": "Capability for the Screen Partner main window",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging"
+  ]
 }
