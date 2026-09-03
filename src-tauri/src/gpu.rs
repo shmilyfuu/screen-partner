@@ -68,9 +68,7 @@ mod platform {
         }
 
         pub fn sample(&mut self) -> Option<f32> {
-            if self.service == 0
-                || self.statistics_key.is_null()
-                || self.utilization_key.is_null()
+            if self.service == 0 || self.statistics_key.is_null() || self.utilization_key.is_null()
             {
                 return None;
             }
@@ -145,8 +143,7 @@ mod platform {
         statistics_key: CfStringRef,
         utilization_key: CfStringRef,
     ) -> bool {
-        let statistics =
-            IORegistryEntryCreateCFProperty(service, statistics_key, ptr::null(), 0);
+        let statistics = IORegistryEntryCreateCFProperty(service, statistics_key, ptr::null(), 0);
         if statistics.is_null() {
             return false;
         }
@@ -164,20 +161,14 @@ mod platform {
         )
     }
 
-    unsafe fn read_utilization(
-        statistics: CfTypeRef,
-        utilization_key: CfStringRef,
-    ) -> Option<f32> {
+    unsafe fn read_utilization(statistics: CfTypeRef, utilization_key: CfStringRef) -> Option<f32> {
         if CFGetTypeID(statistics) != CFDictionaryGetTypeID() {
             return None;
         }
 
         let mut raw_value: *const c_void = ptr::null();
-        let found = CFDictionaryGetValueIfPresent(
-            statistics.cast(),
-            utilization_key,
-            &mut raw_value,
-        );
+        let found =
+            CFDictionaryGetValueIfPresent(statistics.cast(), utilization_key, &mut raw_value);
         if found == 0 || raw_value.is_null() || CFGetTypeID(raw_value) != CFNumberGetTypeID() {
             return None;
         }
@@ -399,7 +390,9 @@ mod platform {
             return None;
         }
 
-        Some(String::from_utf16_lossy(slice::from_raw_parts(value, length)))
+        Some(String::from_utf16_lossy(slice::from_raw_parts(
+            value, length,
+        )))
     }
 
     fn engine_key(instance_name: &str) -> &str {
