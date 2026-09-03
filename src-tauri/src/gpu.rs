@@ -11,7 +11,7 @@ mod platform {
     const K_CF_NUMBER_DOUBLE_TYPE: i32 = 13;
 
     #[link(name = "IOKit", kind = "framework")]
-    unsafe extern "C" {
+    extern "C" {
         fn IOServiceMatching(name: *const c_char) -> *mut c_void;
         fn IOServiceGetMatchingService(main_port: u32, matching: *const c_void) -> IoObject;
         fn IORegistryEntryCreateCFProperty(
@@ -24,7 +24,7 @@ mod platform {
     }
 
     #[link(name = "CoreFoundation", kind = "framework")]
-    unsafe extern "C" {
+    extern "C" {
         fn CFStringCreateWithCString(
             allocator: *const c_void,
             c_string: *const c_char,
@@ -51,9 +51,13 @@ mod platform {
     impl GpuSampler {
         pub fn new() -> Self {
             unsafe {
-                let service = find_gpu_service();
                 let statistics_key = create_cf_string(b"PerformanceStatistics\0");
                 let utilization_key = create_cf_string(b"Device Utilization %\0");
+                let service = if statistics_key.is_null() || utilization_key.is_null() {
+                    0
+                } else {
+                    find_gpu_service(statistics_key, utilization_key)
+                };
 
                 Self {
                     service,
@@ -111,7 +115,10 @@ mod platform {
         }
     }
 
-    unsafe fn find_gpu_service() -> IoObject {
+    unsafe fn find_gpu_service(
+        statistics_key: CfStringRef,
+        utilization_key: CfStringRef,
+    ) -> IoObject {
         for class_name in [b"IOGPU\0".as_slice(), b"IOAccelerator\0".as_slice()] {
             let matching = IOServiceMatching(class_name.as_ptr().cast());
             if matching.is_null() {
@@ -119,12 +126,34 @@ mod platform {
             }
 
             let service = IOServiceGetMatchingService(0, matching);
-            if service != 0 {
+            if service == 0 {
+                continue;
+            }
+
+            if service_has_utilization(service, statistics_key, utilization_key) {
                 return service;
             }
+
+            let _ = IOObjectRelease(service);
         }
 
         0
+    }
+
+    unsafe fn service_has_utilization(
+        service: IoObject,
+        statistics_key: CfStringRef,
+        utilization_key: CfStringRef,
+    ) -> bool {
+        let statistics =
+            IORegistryEntryCreateCFProperty(service, statistics_key, ptr::null(), 0);
+        if statistics.is_null() {
+            return false;
+        }
+
+        let available = read_utilization(statistics, utilization_key).is_some();
+        CFRelease(statistics);
+        available
     }
 
     unsafe fn create_cf_string(value: &[u8]) -> CfStringRef {
@@ -188,11 +217,7 @@ mod platform {
 
     #[repr(C)]
     union PdhFormattedValueUnion {
-        long_value: i32,
         double_value: f64,
-        large_value: i64,
-        ansi_string_value: *mut i8,
-        wide_string_value: *mut u16,
     }
 
     #[repr(C)]
@@ -208,7 +233,7 @@ mod platform {
     }
 
     #[link(name = "pdh")]
-    unsafe extern "system" {
+    extern "system" {
         fn PdhOpenQueryW(
             data_source: *const u16,
             user_data: usize,
@@ -315,7 +340,8 @@ mod platform {
             return None;
         }
 
-        let slot_count = (buffer_size as usize).div_ceil(std::mem::size_of::<u64>());
+        let slot_size = std::mem::size_of::<u64>();
+        let slot_count = (buffer_size as usize + slot_size - 1) / slot_size;
         let mut buffer = vec![0_u64; slot_count];
         let status = PdhGetFormattedCounterArrayW(
             counter,
@@ -346,7 +372,9 @@ mod platform {
                 continue;
             }
 
-            let name = wide_string(item.name)?;
+            let Some(name) = wide_string(item.name) else {
+                continue;
+            };
             let key = engine_key(&name).to_owned();
             *engines.entry(key).or_default() += utilization;
         }
