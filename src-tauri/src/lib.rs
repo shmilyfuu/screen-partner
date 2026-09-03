@@ -24,6 +24,11 @@ struct Settings {
     window: WindowSettings,
 }
 
+#[tauri::command]
+fn development_ui_enabled() -> bool {
+    cfg!(debug_assertions) || option_env!("SCREEN_PARTNER_DEV_UI") == Some("1")
+}
+
 fn settings_path(app: &tauri::AppHandle) -> PathBuf {
     #[cfg(windows)]
     if let Ok(exe_path) = std::env::current_exe() {
@@ -170,6 +175,7 @@ fn recall_main_window(app: &tauri::AppHandle) {
 
 pub fn run() {
     let app = tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![development_ui_enabled])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 restore_or_place_main_window(app.handle(), &window);

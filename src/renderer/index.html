@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Screen Partner</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="pet-stage" aria-label="Screen Partner">
+      <div
+        class="sprite-pet"
+        data-pet-sprite
+        data-tauri-drag-region
+        aria-label="desktop pet"
+        hidden
+      ></div>
+
+      <div class="empty-state" data-empty-state hidden>
+        Pet resource unavailable
+      </div>
+
+      <label class="debug-controls" data-debug-controls hidden>
+        <span>State</span>
+        <select data-debug-state>
+          <option value="auto">Auto</option>
+          <option value="idle">idle</option>
+          <option value="running-right">running-right</option>
+          <option value="running-left">running-left</option>
+          <option value="waving">waving</option>
+          <option value="jumping">jumping</option>
+          <option value="failed">failed</option>
+          <option value="waiting">waiting</option>
+          <option value="running">running</option>
+          <option value="review">review</option>
+        </select>
+      </label>
+    </main>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

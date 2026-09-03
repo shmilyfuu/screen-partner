@@ -4,10 +4,11 @@
   "version": "0.0.1",
   "identifier": "io.github.shmilyfuu.screen-partner",
   "build": {
-    "frontendDist": "../web"
+    "frontendDist": "../src/renderer"
   },
   "app": {
     "macOSPrivateApi": true,
+    "withGlobalTauri": true,
     "windows": [
       {
         "label": "main",
