@@ -1,0 +1,11 @@
+{
+  "id": "screen-partner-preview",
+  "displayName": "Screen Partner Preview",
+  "spritesheetPath": "spritesheet.webp",
+  "frame": {
+    "width": 192,
+    "height": 208,
+    "columns": 8,
+    "rows": 9
+  }
+}
