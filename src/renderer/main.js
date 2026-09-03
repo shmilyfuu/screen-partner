@@ -3,7 +3,7 @@ import { PET_STATES } from "./core/normalized-pet.js";
 import { loadCodexV1Pet } from "./codex-v1-manifest.js";
 import { SpriteRenderer } from "./sprite-renderer.js";
 
-const phase = "phase-3";
+const phase = "phase-3b";
 const DEFAULT_PET_MANIFEST = "./pets/development/pet.json";
 const SYSTEM_METRICS_EVENT = "system-metrics";
 
@@ -77,6 +77,10 @@ function formatRate(bytesPerSecond) {
 }
 
 function formatPercent(value) {
+  if (value === null || value === undefined) {
+    return "--";
+  }
+
   const number = Number(value);
   return Number.isFinite(number) ? `${Math.round(number)}%` : "--";
 }
@@ -87,7 +91,7 @@ function updateDebugMetrics(metrics) {
   }
 
   debugMetricsElement.textContent =
-    `CPU ${formatPercent(metrics.cpuUsagePercent)} · RAM ${formatPercent(metrics.memoryUsagePercent)}\n` +
+    `CPU ${formatPercent(metrics.cpuUsagePercent)} · GPU ${formatPercent(metrics.gpuUsagePercent)} · RAM ${formatPercent(metrics.memoryUsagePercent)}\n` +
     `D ${formatRate(metrics.diskReadBps)}/${formatRate(metrics.diskWriteBps)} · ` +
     `N ${formatRate(metrics.networkRxBps)}/${formatRate(metrics.networkTxBps)}`;
 }
