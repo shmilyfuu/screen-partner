@@ -1,3 +1,4 @@
+use crate::gpu::GpuSampler;
 use serde::Serialize;
 use std::{
     thread,
@@ -14,6 +15,7 @@ pub const TELEMETRY_INTERVAL: Duration = Duration::from_secs(1);
 pub struct SystemMetrics {
     pub timestamp_ms: u64,
     pub cpu_usage_percent: f32,
+    pub gpu_usage_percent: Option<f32>,
     pub memory_usage_percent: f32,
     pub disk_read_bps: u64,
     pub disk_write_bps: u64,
@@ -24,6 +26,7 @@ pub struct SystemMetrics {
 
 pub struct TelemetrySampler {
     system: System,
+    gpu: GpuSampler,
     disks: Disks,
     networks: Networks,
     last_sampled_at: Instant,
@@ -35,6 +38,8 @@ impl TelemetrySampler {
         system.refresh_cpu_usage();
         system.refresh_memory();
 
+        let gpu = GpuSampler::new();
+
         let mut disks = Disks::new_with_refreshed_list();
         disks.refresh(true);
 
@@ -43,6 +48,7 @@ impl TelemetrySampler {
 
         Self {
             system,
+            gpu,
             disks,
             networks,
             last_sampled_at: Instant::now(),
@@ -77,6 +83,7 @@ impl TelemetrySampler {
         SystemMetrics {
             timestamp_ms: unix_timestamp_ms(),
             cpu_usage_percent: self.system.global_cpu_usage().clamp(0.0, 100.0),
+            gpu_usage_percent: self.gpu.sample(),
             memory_usage_percent: memory_usage_percent(
                 self.system.used_memory(),
                 self.system.total_memory(),
@@ -161,6 +168,7 @@ mod tests {
         let metrics = SystemMetrics {
             timestamp_ms: 123,
             cpu_usage_percent: 12.5,
+            gpu_usage_percent: Some(56.25),
             memory_usage_percent: 34.5,
             disk_read_bps: 10,
             disk_write_bps: 20,
@@ -172,6 +180,7 @@ mod tests {
         let value = serde_json::to_value(metrics).expect("metrics should serialize");
         assert_eq!(value["timestampMs"], 123);
         assert_eq!(value["cpuUsagePercent"], 12.5);
+        assert_eq!(value["gpuUsagePercent"], 56.25);
         assert_eq!(value["memoryUsagePercent"], 34.5);
         assert_eq!(value["diskReadBps"], 10);
         assert_eq!(value["diskWriteBps"], 20);
