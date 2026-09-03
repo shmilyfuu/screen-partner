@@ -1,4 +1,4 @@
-name: Phase 0 CI
+name: Screen Partner CI
 
 on:
   workflow_dispatch:
@@ -7,6 +7,7 @@ on:
       - main
       - phase0-bootstrap
       - phase0b-animation-core
+      - phase1-sprite-renderer
   pull_request:
     branches:
       - main
@@ -75,6 +76,8 @@ jobs:
       - name: Build Windows portable executable
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          SCREEN_PARTNER_DEV_UI: '1'
         run: |
           cargo build --manifest-path src-tauri/Cargo.toml --release --target ${{ matrix.target }}
           New-Item -ItemType Directory -Force artifacts/windows | Out-Null
@@ -85,6 +88,7 @@ jobs:
         run: npm run tauri build -- --target ${{ matrix.target }} --bundles dmg
         env:
           APPLE_SIGNING_IDENTITY: '-'
+          SCREEN_PARTNER_DEV_UI: '1'
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
