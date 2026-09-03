@@ -34,7 +34,7 @@ body {
 .sprite-pet {
   width: 192px;
   height: 208px;
-  margin-bottom: 14px;
+  margin-bottom: 38px;
   cursor: grab;
   background-position: 0 0;
   background-repeat: no-repeat;
@@ -58,7 +58,7 @@ body {
 
 .debug-controls {
   position: absolute;
-  top: 7px;
+  bottom: 7px;
   left: 50%;
   z-index: 2;
   display: flex;
