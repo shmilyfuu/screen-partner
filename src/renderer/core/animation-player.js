@@ -3,6 +3,36 @@ import { validateNormalizedPet } from "./normalized-pet.js";
 
 export const DEFAULT_LONG_PAUSE_THRESHOLD_MS = 2500;
 
+function normalizePendingDecision(decision) {
+  if (!decision || typeof decision !== "object") {
+    throw new TypeError("decision must be an object");
+  }
+
+  if (!Number.isFinite(decision.priority) || decision.priority < 0) {
+    throw new TypeError("decision.priority must be a non-negative finite number");
+  }
+
+  if (typeof decision.source !== "string" || decision.source.length === 0) {
+    throw new TypeError("decision.source must be a non-empty string");
+  }
+
+  if (typeof decision.reason !== "string" || decision.reason.length === 0) {
+    throw new TypeError("decision.reason must be a non-empty string");
+  }
+
+  if (!Number.isFinite(decision.requestedAt)) {
+    throw new TypeError("decision.requestedAt must be finite");
+  }
+
+  return Object.freeze({
+    state: decision.state,
+    priority: decision.priority,
+    source: decision.source,
+    reason: decision.reason,
+    requestedAt: decision.requestedAt,
+  });
+}
+
 export class AnimationPlayer {
   #clock;
   #onFrame;
@@ -13,6 +43,7 @@ export class AnimationPlayer {
   #suspended = false;
   #suspendedRemainingMs = 0;
   #currentState = null;
+  #pendingDecision = null;
   #currentFrameIndex = 0;
   #frameStartedAt = 0;
   #frameDeadline = 0;
@@ -48,6 +79,7 @@ export class AnimationPlayer {
     this.#running = false;
     this.#suspended = false;
     this.#currentState = null;
+    this.#pendingDecision = null;
     this.#currentFrameIndex = 0;
     this.#actionCycleId = 0;
   }
@@ -59,6 +91,7 @@ export class AnimationPlayer {
     this.#running = true;
     this.#suspended = false;
     this.#currentState = initialState;
+    this.#pendingDecision = null;
     this.#currentFrameIndex = 0;
     this.#frameStartedAt = now;
     this.#frameDeadline = now + animation.frames[0].durationMs;
@@ -67,6 +100,20 @@ export class AnimationPlayer {
     this.#emitFrame();
 
     return this.getSnapshot();
+  }
+
+  requestDecision(decision) {
+    this.#getAnimation(decision?.state);
+    this.#pendingDecision = normalizePendingDecision(decision);
+    return this.#pendingDecision;
+  }
+
+  clearPendingDecision() {
+    this.#pendingDecision = null;
+  }
+
+  getPendingDecision() {
+    return this.#pendingDecision;
   }
 
   tick() {
@@ -104,17 +151,26 @@ export class AnimationPlayer {
       return this.getSnapshot();
     }
 
+    const completedState = this.#currentState;
     const completedCycleId = this.#actionCycleId;
+    const appliedDecision = this.#pendingDecision;
+    const nextState = appliedDecision?.state ?? completedState;
+
+    this.#pendingDecision = null;
     this.#onActionBoundary({
-      state: this.#currentState,
+      state: completedState,
+      nextState,
+      appliedDecision,
       actionCycleId: completedCycleId,
       completedAt: now,
     });
 
+    const nextAnimation = this.#getAnimation(nextState);
+    this.#currentState = nextState;
     this.#actionCycleId += 1;
     this.#currentFrameIndex = 0;
     this.#frameStartedAt = now;
-    this.#frameDeadline = now + animation.frames[0].durationMs;
+    this.#frameDeadline = now + nextAnimation.frames[0].durationMs;
     this.#emitFrame();
 
     return this.getSnapshot();
@@ -154,6 +210,7 @@ export class AnimationPlayer {
       running: this.#running,
       suspended: this.#suspended,
       currentState: this.#currentState,
+      pendingDecision: this.#pendingDecision,
       currentFrameIndex: this.#currentFrameIndex,
       frameStartedAt: this.#frameStartedAt,
       frameDeadline: this.#frameDeadline,
