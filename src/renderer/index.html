@@ -26,8 +26,10 @@
           D --/-- · N --/--
         </output>
         <label class="debug-state-control">
-          <span>State</span>
-          <select data-debug-state>
+          <span class="debug-current-state">
+            State <output data-debug-current-state>idle</output>
+          </span>
+          <select data-debug-state aria-label="Debug behavior mode">
             <option value="auto">Auto</option>
             <option value="idle">idle</option>
             <option value="running-right">running-right</option>
