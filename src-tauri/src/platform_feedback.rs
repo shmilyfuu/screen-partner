@@ -85,10 +85,7 @@ mod platform {
             return CursorFeedbackSample::new("normal", Some("IDC_ARROW".to_string()));
         }
 
-        CursorFeedbackSample::new(
-            "other",
-            Some(format!("HCURSOR:{:p}", cursor_info.cursor)),
-        )
+        CursorFeedbackSample::new("other", Some(format!("HCURSOR:{:p}", cursor_info.cursor)))
     }
 }
 
@@ -114,11 +111,8 @@ mod platform {
 
             let send_id: unsafe extern "C" fn(*mut c_void, *const c_void) -> *mut c_void =
                 mem::transmute(objc_msg_send as *const ());
-            let send_bool: unsafe extern "C" fn(
-                *mut c_void,
-                *const c_void,
-                *const c_void,
-            ) -> i8 = mem::transmute(objc_msg_send as *const ());
+            let send_bool: unsafe extern "C" fn(*mut c_void, *const c_void, *const c_void) -> i8 =
+                mem::transmute(objc_msg_send as *const ());
             let send_i64: unsafe extern "C" fn(*mut c_void, *const c_void) -> i64 =
                 mem::transmute(objc_msg_send as *const ());
 
