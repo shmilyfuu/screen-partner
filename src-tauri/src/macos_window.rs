@@ -1,6 +1,10 @@
 #![cfg(target_os = "macos")]
 
-use std::{ffi::c_void, os::raw::c_char, sync::OnceLock};
+use std::{
+    ffi::{c_void, CStr},
+    os::raw::c_char,
+    sync::OnceLock,
+};
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -56,7 +60,9 @@ unsafe fn install_unconstrained_frame(window: &tauri::WebviewWindow) -> Result<(
         return Err("NSWindow class is unavailable".to_string());
     }
 
-    let selector = sel_registerName(b"constrainFrameRect:toScreen:\0".as_ptr().cast());
+    let selector_name = CStr::from_bytes_with_nul(b"constrainFrameRect:toScreen:\0")
+        .map_err(|_| "constrainFrameRect selector name is invalid".to_string())?;
+    let selector = sel_registerName(selector_name.as_ptr());
     if selector.is_null() {
         return Err("constrainFrameRect selector is unavailable".to_string());
     }
@@ -64,8 +70,11 @@ unsafe fn install_unconstrained_frame(window: &tauri::WebviewWindow) -> Result<(
     // Tao's window class inherits AppKit's top-edge constraint. Adding the
     // method to the concrete class overrides the inherited implementation.
     let implementation = unconstrained_frame_rect as *const () as *const c_void;
-    let types = b"{CGRect={CGPoint=dd}{CGSize=dd}}@:{CGRect={CGPoint=dd}{CGSize=dd}}@\0";
-    if class_addMethod(class, selector, implementation, types.as_ptr().cast()) == 0 {
+    let types = CStr::from_bytes_with_nul(
+        b"{CGRect={CGPoint=dd}{CGSize=dd}}@:{CGRect={CGPoint=dd}{CGSize=dd}}@\0",
+    )
+    .map_err(|_| "constrainFrameRect type encoding is invalid".to_string())?;
+    if class_addMethod(class, selector, implementation, types.as_ptr()) == 0 {
         return Err("failed to install unconstrained NSWindow frame override".to_string());
     }
 
