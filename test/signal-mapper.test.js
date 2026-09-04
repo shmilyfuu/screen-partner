@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { BehaviorArbiter } from "../src/renderer/core/behavior-arbiter.js";
+import {
+  BehaviorArbiter,
+  DECISION_PRIORITY,
+} from "../src/renderer/core/behavior-arbiter.js";
 import { FakeClock } from "../src/renderer/core/clock.js";
 import { SignalMapper, SYSTEM_SIGNAL_KEYS } from "../src/renderer/core/signal-mapper.js";
 
@@ -149,4 +152,33 @@ test("a long telemetry gap restarts dwell timers", () => {
   assert.equal(mapper.update(metrics({ cpuUsagePercent: 90 })).load, null);
   clock.advance(3_000);
   assert.equal(mapper.update(metrics({ cpuUsagePercent: 90 })).load, null);
+});
+
+test("debug override wins over system load and clearing it restores automatic behavior", () => {
+  const clock = new FakeClock();
+  const mapper = new SignalMapper({ clock });
+  const arbiter = new BehaviorArbiter({ clock });
+
+  let snapshot = mapper.update(metrics({ cpuUsagePercent: 85 }));
+  for (let second = 0; second < 5; second += 1) {
+    clock.advance(1_000);
+    snapshot = mapper.update(metrics({ cpuUsagePercent: 85 }));
+  }
+  applySnapshot(arbiter, snapshot);
+  assert.equal(arbiter.decide().state, "review");
+
+  arbiter.setContinuousSignal("debug-state", {
+    state: "jumping",
+    priority: DECISION_PRIORITY.interaction,
+    source: "debug_menu",
+    reason: "manual_state",
+  });
+  assert.equal(arbiter.decide().state, "jumping");
+
+  clock.advance(1_000);
+  applySnapshot(arbiter, mapper.update(metrics({ cpuUsagePercent: 85 })));
+  assert.equal(arbiter.decide().state, "jumping");
+
+  arbiter.clearContinuousSignal("debug-state");
+  assert.equal(arbiter.decide().state, "review");
 });
