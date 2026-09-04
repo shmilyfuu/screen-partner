@@ -281,7 +281,7 @@ mod platform {
     };
 
     const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
-    const K_CF_NUMBER_SINT64_TYPE: i64 = 4;
+    const K_CF_NUMBER_SINT64_TYPE: i32 = 4;
     const KERN_SUCCESS: i32 = 0;
 
     type IoObject = u32;
@@ -325,7 +325,7 @@ mod platform {
             encoding: u32,
         ) -> CfStringRef;
         fn CFDictionaryGetValue(dictionary: CfDictionaryRef, key: CfTypeRef) -> CfTypeRef;
-        fn CFNumberGetValue(number: CfTypeRef, number_type: i64, value: *mut c_void) -> u8;
+        fn CFNumberGetValue(number: CfTypeRef, number_type: i32, value: *mut c_void) -> u8;
         fn CFRelease(value: CfTypeRef);
     }
 
