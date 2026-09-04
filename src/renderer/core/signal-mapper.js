@@ -97,6 +97,18 @@ class TimedHysteresisGate {
     }
     return this.#active;
   }
+
+  getSnapshot(now) {
+    return Object.freeze({
+      active: this.#active,
+      enterSince: this.#enterSince,
+      exitSince: this.#exitSince,
+      enterElapsedMs:
+        this.#enterSince === null ? 0 : Math.max(0, now - this.#enterSince),
+      exitElapsedMs:
+        this.#exitSince === null ? 0 : Math.max(0, now - this.#exitSince),
+    });
+  }
 }
 
 function finiteNumber(value, fallback = 0) {
@@ -116,10 +128,24 @@ function nonNegativeRate(...values) {
   return values.reduce((total, value) => total + Math.max(0, finiteNumber(value)), 0);
 }
 
+function decisionSummary(decision) {
+  if (!decision) {
+    return null;
+  }
+
+  return Object.freeze({
+    state: decision.state,
+    priority: decision.priority,
+    source: decision.source,
+    reason: decision.reason,
+  });
+}
+
 export class SignalMapper {
   #clock;
   #rules;
   #lastSampleAt = null;
+  #lastDiagnostics = null;
   #cpuGate;
   #gpuGate;
   #memoryPressureGate;
@@ -146,10 +172,11 @@ export class SignalMapper {
     }
 
     const now = this.#clock.now();
-    if (
-      this.#lastSampleAt !== null &&
-      now - this.#lastSampleAt >= this.#rules.maxSampleGapMs
-    ) {
+    const previousSampleAt = this.#lastSampleAt;
+    const sampleGapMs = previousSampleAt === null ? null : now - previousSampleAt;
+    const resetForSampleGap =
+      sampleGapMs !== null && sampleGapMs >= this.#rules.maxSampleGapMs;
+    if (resetForSampleGap) {
       this.#resetGates();
     }
     this.#lastSampleAt = now;
@@ -157,36 +184,51 @@ export class SignalMapper {
     const cpu = finiteNumber(metrics.cpuUsagePercent);
     const gpu = optionalPercent(metrics.gpuUsagePercent);
     const memory = finiteNumber(metrics.memoryUsagePercent);
-    const diskBps = nonNegativeRate(metrics.diskReadBps, metrics.diskWriteBps);
-    const networkBps = nonNegativeRate(metrics.networkRxBps, metrics.networkTxBps);
+    const diskReadBps = nonNegativeRate(metrics.diskReadBps);
+    const diskWriteBps = nonNegativeRate(metrics.diskWriteBps);
+    const diskBps = diskReadBps + diskWriteBps;
+    const networkRxBps = nonNegativeRate(metrics.networkRxBps);
+    const networkTxBps = nonNegativeRate(metrics.networkTxBps);
+    const networkBps = networkRxBps + networkTxBps;
+
+    const cpuEnterCondition = cpu >= this.#rules.cpu.enterPercent;
+    const cpuExitCondition = cpu <= this.#rules.cpu.exitPercent;
+    const gpuEnterCondition = gpu !== null && gpu >= this.#rules.gpu.enterPercent;
+    const gpuExitCondition = gpu === null || gpu <= this.#rules.gpu.exitPercent;
+    const memoryEnterCondition = memory >= this.#rules.memoryPressure.enterPercent;
+    const memoryExitCondition = memory <= this.#rules.memoryPressure.exitPercent;
+    const diskEnterCondition = diskBps >= this.#rules.disk.enterBps;
+    const diskExitCondition = diskBps <= this.#rules.disk.exitBps;
+    const networkEnterCondition = networkBps >= this.#rules.network.enterBps;
+    const networkExitCondition = networkBps <= this.#rules.network.exitBps;
 
     const cpuBusy = this.#cpuGate.update({
-      enterCondition: cpu >= this.#rules.cpu.enterPercent,
-      exitCondition: cpu <= this.#rules.cpu.exitPercent,
+      enterCondition: cpuEnterCondition,
+      exitCondition: cpuExitCondition,
       now,
     });
     const gpuBusy = this.#gpuGate.update({
-      enterCondition: gpu !== null && gpu >= this.#rules.gpu.enterPercent,
-      exitCondition: gpu === null || gpu <= this.#rules.gpu.exitPercent,
+      enterCondition: gpuEnterCondition,
+      exitCondition: gpuExitCondition,
       now,
     });
     const memoryPressure = this.#memoryPressureGate.update({
-      enterCondition: memory >= this.#rules.memoryPressure.enterPercent,
-      exitCondition: memory <= this.#rules.memoryPressure.exitPercent,
+      enterCondition: memoryEnterCondition,
+      exitCondition: memoryExitCondition,
       now,
     });
     const diskBusy = this.#diskGate.update({
-      enterCondition: diskBps >= this.#rules.disk.enterBps,
-      exitCondition: diskBps <= this.#rules.disk.exitBps,
+      enterCondition: diskEnterCondition,
+      exitCondition: diskExitCondition,
       now,
     });
     const networkBusy = this.#networkGate.update({
-      enterCondition: networkBps >= this.#rules.network.enterBps,
-      exitCondition: networkBps <= this.#rules.network.exitBps,
+      enterCondition: networkEnterCondition,
+      exitCondition: networkExitCondition,
       now,
     });
 
-    return Object.freeze({
+    const snapshot = Object.freeze({
       fallback: {
         state: "idle",
         priority: DECISION_PRIORITY.idle,
@@ -203,6 +245,126 @@ export class SignalMapper {
             reason: "sustained memory pressure",
           }
         : null,
+    });
+
+    this.#lastDiagnostics = Object.freeze({
+      now,
+      sampleGapMs,
+      resetForSampleGap,
+      values: Object.freeze({
+        cpuPercent: cpu,
+        gpuPercent: gpu,
+        memoryPercent: memory,
+        diskReadBps,
+        diskWriteBps,
+        diskTotalBps: diskBps,
+        networkRxBps,
+        networkTxBps,
+        networkTotalBps: networkBps,
+        userIdleSeconds:
+          metrics.userIdleSeconds === null || metrics.userIdleSeconds === undefined
+            ? null
+            : finiteNumber(metrics.userIdleSeconds, null),
+      }),
+      gates: Object.freeze({
+        cpu: this.#gateDiagnostics({
+          gate: this.#cpuGate,
+          now,
+          value: cpu,
+          unit: "percent",
+          enterCondition: cpuEnterCondition,
+          exitCondition: cpuExitCondition,
+          enterThreshold: this.#rules.cpu.enterPercent,
+          exitThreshold: this.#rules.cpu.exitPercent,
+          enterDurationMs: this.#rules.cpu.enterDurationMs,
+          exitDurationMs: this.#rules.cpu.exitDurationMs,
+        }),
+        gpu: this.#gateDiagnostics({
+          gate: this.#gpuGate,
+          now,
+          value: gpu,
+          unit: "percent",
+          enterCondition: gpuEnterCondition,
+          exitCondition: gpuExitCondition,
+          enterThreshold: this.#rules.gpu.enterPercent,
+          exitThreshold: this.#rules.gpu.exitPercent,
+          enterDurationMs: this.#rules.gpu.enterDurationMs,
+          exitDurationMs: this.#rules.gpu.exitDurationMs,
+        }),
+        memory: this.#gateDiagnostics({
+          gate: this.#memoryPressureGate,
+          now,
+          value: memory,
+          unit: "percent",
+          enterCondition: memoryEnterCondition,
+          exitCondition: memoryExitCondition,
+          enterThreshold: this.#rules.memoryPressure.enterPercent,
+          exitThreshold: this.#rules.memoryPressure.exitPercent,
+          enterDurationMs: this.#rules.memoryPressure.enterDurationMs,
+          exitDurationMs: this.#rules.memoryPressure.exitDurationMs,
+        }),
+        disk: this.#gateDiagnostics({
+          gate: this.#diskGate,
+          now,
+          value: diskBps,
+          unit: "bytesPerSecond",
+          enterCondition: diskEnterCondition,
+          exitCondition: diskExitCondition,
+          enterThreshold: this.#rules.disk.enterBps,
+          exitThreshold: this.#rules.disk.exitBps,
+          enterDurationMs: this.#rules.disk.enterDurationMs,
+          exitDurationMs: this.#rules.disk.exitDurationMs,
+        }),
+        network: this.#gateDiagnostics({
+          gate: this.#networkGate,
+          now,
+          value: networkBps,
+          unit: "bytesPerSecond",
+          enterCondition: networkEnterCondition,
+          exitCondition: networkExitCondition,
+          enterThreshold: this.#rules.network.enterBps,
+          exitThreshold: this.#rules.network.exitBps,
+          enterDurationMs: this.#rules.network.enterDurationMs,
+          exitDurationMs: this.#rules.network.exitDurationMs,
+        }),
+      }),
+      decisions: Object.freeze({
+        fallback: decisionSummary(snapshot.fallback),
+        waiting: decisionSummary(snapshot.waiting),
+        load: decisionSummary(snapshot.load),
+        pressure: decisionSummary(snapshot.pressure),
+      }),
+    });
+
+    return snapshot;
+  }
+
+  getDiagnostics() {
+    return this.#lastDiagnostics;
+  }
+
+  #gateDiagnostics({
+    gate,
+    now,
+    value,
+    unit,
+    enterCondition,
+    exitCondition,
+    enterThreshold,
+    exitThreshold,
+    enterDurationMs,
+    exitDurationMs,
+  }) {
+    return Object.freeze({
+      ...gate.getSnapshot(now),
+      value,
+      unit,
+      enterCondition,
+      exitCondition,
+      enterThreshold,
+      exitThreshold,
+      enterDurationMs,
+      exitDurationMs,
     });
   }
 
