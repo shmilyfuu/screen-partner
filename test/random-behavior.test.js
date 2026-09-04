@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { AnimationPlayer } from "../src/renderer/core/animation-player.js";
 import {
   BehaviorArbiter,
   DECISION_PRIORITY,
 } from "../src/renderer/core/behavior-arbiter.js";
 import { FakeClock } from "../src/renderer/core/clock.js";
+import { createNormalizedPet } from "../src/renderer/core/normalized-pet.js";
 import {
   DEFAULT_RANDOM_BEHAVIOR_RULES,
   RandomBehavior,
@@ -22,6 +24,23 @@ function sequenceRandom(values) {
     }
     return value;
   };
+}
+
+function createBoundaryTestPet() {
+  return createNormalizedPet({
+    sourceFormat: "test",
+    id: "random-boundary-test",
+    displayName: "Random Boundary Test",
+    spritesheetPath: "test.webp",
+    frameWidth: 1,
+    frameHeight: 1,
+    columns: 1,
+    rows: 2,
+    animations: {
+      idle: { frames: [{ spriteIndex: 0, durationMs: 10 }] },
+      waving: { frames: [{ spriteIndex: 1, durationMs: 10 }] },
+    },
+  });
 }
 
 test("default random behavior preserves the documented 30-120s schedule and weights", () => {
@@ -162,4 +181,63 @@ test("clearing a random latch when P2 work arrives prevents delayed replay after
   randomBehavior.reschedule();
   arbiter.clearContinuousSignal("cpu");
   assert.equal(arbiter.decide(), null);
+});
+
+test("one random action completes at an Action Boundary and then returns to the baseline", () => {
+  const clock = new FakeClock();
+  const arbiter = new BehaviorArbiter({ clock });
+  const randomBehavior = new RandomBehavior({
+    clock,
+    random: sequenceRandom([0, 0, 0]),
+    rules: {
+      minIntervalMs: 5,
+      maxIntervalMs: 5,
+      cooldownMs: 0,
+      latchTtlMs: 100,
+      actions: [{ state: "waving", weight: 1 }],
+    },
+  });
+
+  arbiter.setContinuousSignal("fallback", {
+    state: "idle",
+    priority: DECISION_PRIORITY.idle,
+    source: "system_default",
+    reason: "normal system activity",
+  });
+
+  const boundaries = [];
+  const player = new AnimationPlayer({
+    clock,
+    longPauseThresholdMs: 10_000,
+    onActionBoundary: (boundary) => {
+      boundaries.push(boundary);
+      arbiter.consumeDecision(boundary.appliedDecision);
+      const nextDecision = arbiter.decide();
+      if (nextDecision) {
+        player.requestDecision(nextDecision);
+      } else {
+        player.clearPendingDecision();
+      }
+    },
+  });
+  player.loadPet(createBoundaryTestPet());
+  player.start("idle");
+
+  randomBehavior.start();
+  clock.advance(5);
+  const event = randomBehavior.poll();
+  arbiter.latchSignal(RANDOM_SIGNAL_KEY, event.decision, event.latchTtlMs);
+  player.requestDecision(arbiter.decide());
+
+  assert.equal(player.getSnapshot().currentState, "idle");
+  clock.advance(5);
+  player.tick();
+  assert.equal(player.getSnapshot().currentState, "waving");
+  assert.equal(boundaries[0].appliedDecision.source, "random_behavior");
+  assert.equal(player.getPendingDecision().source, "system_default");
+
+  clock.advance(10);
+  player.tick();
+  assert.equal(player.getSnapshot().currentState, "idle");
+  assert.equal(boundaries[1].appliedDecision.source, "system_default");
 });
