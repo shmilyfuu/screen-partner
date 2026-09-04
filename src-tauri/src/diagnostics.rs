@@ -60,7 +60,7 @@ pub fn append_diagnostic_log(app: tauri::AppHandle, lines: Vec<String>) -> Resul
         .map_err(|error| format!("failed to open diagnostic log: {error}"))?;
 
     for line in lines {
-        let normalized = line.replace('\r', " ").replace('\n', " ");
+        let normalized = line.replace(['\r', '\n'], " ");
         writeln!(file, "{normalized}")
             .map_err(|error| format!("failed to append diagnostic log: {error}"))?;
     }
