@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { AnimationPlayer } from "../src/renderer/core/animation-player.js";
 import {
   BehaviorArbiter,
   DECISION_PRIORITY,
 } from "../src/renderer/core/behavior-arbiter.js";
 import { FakeClock } from "../src/renderer/core/clock.js";
+import { createNormalizedPet } from "../src/renderer/core/normalized-pet.js";
 import { SignalMapper, SYSTEM_SIGNAL_KEYS } from "../src/renderer/core/signal-mapper.js";
 
 function metrics(overrides = {}) {
@@ -32,6 +34,23 @@ function applySnapshot(arbiter, snapshot) {
       arbiter.clearContinuousSignal(key);
     }
   }
+}
+
+function createBehaviorTestPet() {
+  return createNormalizedPet({
+    sourceFormat: "test",
+    id: "behavior-test-pet",
+    displayName: "Behavior Test Pet",
+    spritesheetPath: "test.webp",
+    frameWidth: 1,
+    frameHeight: 1,
+    columns: 1,
+    rows: 2,
+    animations: {
+      idle: { frames: [{ spriteIndex: 0, durationMs: 10_000 }] },
+      review: { frames: [{ spriteIndex: 1, durationMs: 1_000 }] },
+    },
+  });
 }
 
 test("CPU busy requires sustained load and hysteresis before exit", () => {
@@ -181,4 +200,33 @@ test("debug override wins over system load and clearing it restores automatic be
 
   arbiter.clearContinuousSignal("debug-state");
   assert.equal(arbiter.decide().state, "review");
+});
+
+test("system metrics reach AnimationPlayer through SignalMapper and BehaviorArbiter at an action boundary", () => {
+  const clock = new FakeClock();
+  const mapper = new SignalMapper({ clock });
+  const arbiter = new BehaviorArbiter({ clock });
+  const player = new AnimationPlayer({ clock, longPauseThresholdMs: 100_000 });
+
+  player.loadPet(createBehaviorTestPet());
+  player.start("idle");
+
+  let snapshot = mapper.update(metrics({ cpuUsagePercent: 85 }));
+  for (let second = 0; second < 5; second += 1) {
+    clock.advance(1_000);
+    snapshot = mapper.update(metrics({ cpuUsagePercent: 85 }));
+  }
+  applySnapshot(arbiter, snapshot);
+  player.requestDecision(arbiter.decide());
+
+  assert.equal(player.getSnapshot().currentState, "idle");
+  assert.equal(player.getPendingDecision().state, "review");
+
+  clock.advance(4_999);
+  player.tick();
+  assert.equal(player.getSnapshot().currentState, "idle");
+
+  clock.advance(1);
+  player.tick();
+  assert.equal(player.getSnapshot().currentState, "review");
 });
