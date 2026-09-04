@@ -302,10 +302,14 @@ function suppressPendingRandom(context) {
   }
 
   const nextDueAt = randomBehavior.reschedule();
+  const winner = submitArbiterDecision();
+  logArbiterWinnerChange(winner, `${context}_random_suppressed`);
   diagnosticLog("random_behavior_suppressed", {
     context,
     blocker: compactDecision(blocker),
     nextDueAt,
+    arbiterWinner: compactDecision(winner),
+    pendingDecision: compactDecision(animationPlayer?.getPendingDecision()),
   });
   return true;
 }
@@ -755,8 +759,12 @@ async function initialize() {
       });
 
       if (document.visibilityState === "hidden") {
-        behaviorArbiter.clearLatchedSignal(RANDOM_SIGNAL_KEY);
+        const randomCleared = behaviorArbiter.clearLatchedSignal(RANDOM_SIGNAL_KEY);
         randomBehavior.reset();
+        if (randomCleared) {
+          const winner = submitArbiterDecision();
+          logArbiterWinnerChange(winner, "visibility_hidden_random_cleared");
+        }
         animationPlayer?.suspend();
         void flushDiagnosticLog();
       } else {
