@@ -16,6 +16,18 @@ const phase = "phase-4";
 const DEFAULT_PET_MANIFEST = "./pets/development/pet.json";
 const SYSTEM_METRICS_EVENT = "system-metrics";
 const DEBUG_SIGNAL_KEY = "debug-state";
+const DEBUG_TRIGGER_LABELS = Object.freeze({
+  system_default: "Default",
+  system_idle: "User Idle",
+  cpu_busy: "CPU",
+  gpu_busy: "GPU",
+  cpu_gpu_busy: "CPU+GPU",
+  memory_pressure: "RAM",
+  disk_active: "Disk",
+  network_active: "Network",
+  disk_network_active: "Disk+Network",
+  debug_menu: "Debug",
+});
 
 document.documentElement.dataset.screenPartnerPhase = phase;
 
@@ -28,6 +40,7 @@ const emptyStateElement = document.querySelector("[data-empty-state]");
 const debugControls = document.querySelector("[data-debug-controls]");
 const debugMetricsElement = document.querySelector("[data-debug-metrics]");
 const debugCurrentStateElement = document.querySelector("[data-debug-current-state]");
+const debugCurrentTriggerElement = document.querySelector("[data-debug-current-trigger]");
 const debugStateSelect = document.querySelector("[data-debug-state]");
 
 const renderer = new SpriteRenderer(spriteElement);
@@ -52,11 +65,21 @@ function showPet() {
   spriteElement.hidden = false;
 }
 
-function updateCurrentState(state) {
+function updateCurrentBehavior(state, appliedDecision = null) {
   if (debugCurrentStateElement) {
     debugCurrentStateElement.textContent = state;
   }
   document.documentElement.dataset.petState = state;
+
+  if (!appliedDecision?.source) {
+    return;
+  }
+
+  const trigger = DEBUG_TRIGGER_LABELS[appliedDecision.source] ?? appliedDecision.source;
+  if (debugCurrentTriggerElement) {
+    debugCurrentTriggerElement.textContent = trigger;
+  }
+  document.documentElement.dataset.petTrigger = trigger;
 }
 
 function scheduleAnimationTick() {
@@ -101,27 +124,33 @@ function requestDebugState(state) {
 function formatRate(bytesPerSecond) {
   const value = Number(bytesPerSecond);
   if (!Number.isFinite(value) || value < 0) {
-    return "--";
+    return "--".padStart(7);
   }
 
-  if (value >= 1024 * 1024) {
-    return `${(value / (1024 * 1024)).toFixed(1)}M`;
+  const units = [
+    [1024 ** 4, "T"],
+    [1024 ** 3, "G"],
+    [1024 ** 2, "M"],
+    [1024, "K"],
+  ];
+
+  for (const [factor, suffix] of units) {
+    if (value >= factor) {
+      return `${(value / factor).toFixed(1)}${suffix}`.padStart(7);
+    }
   }
 
-  if (value >= 1024) {
-    return `${(value / 1024).toFixed(1)}K`;
-  }
-
-  return `${Math.round(value)}B`;
+  return `${Math.round(value)}B`.padStart(7);
 }
 
 function formatPercent(value) {
   if (value === null || value === undefined) {
-    return "--";
+    return "--".padStart(4);
   }
 
   const number = Number(value);
-  return Number.isFinite(number) ? `${Math.round(number)}%` : "--";
+  const formatted = Number.isFinite(number) ? `${Math.round(number)}%` : "--";
+  return formatted.padStart(4);
 }
 
 function updateDebugMetrics(metrics) {
@@ -322,14 +351,14 @@ async function initialize() {
       clock: runtimeClock,
       onFrame: (frameEvent) => renderer.renderFrame(frameEvent),
       onActionBoundary: ({ nextState, appliedDecision }) => {
-        updateCurrentState(nextState);
+        updateCurrentBehavior(nextState, appliedDecision);
         behaviorArbiter.consumeDecision(appliedDecision);
         submitArbiterDecision();
       },
     });
     animationPlayer.loadPet(pet);
     animationPlayer.start("idle");
-    updateCurrentState("idle");
+    updateCurrentBehavior("idle", { source: "system_default" });
     showPet();
     installPetDragging();
 
