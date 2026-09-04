@@ -41,8 +41,7 @@ pub fn start_diagnostic_log(app: tauri::AppHandle) -> Result<String, String> {
 
     let path = diagnostic_log_path(&app);
     ensure_parent(&path)?;
-    fs::write(&path, b"")
-        .map_err(|error| format!("failed to reset diagnostic log: {error}"))?;
+    fs::write(&path, b"").map_err(|error| format!("failed to reset diagnostic log: {error}"))?;
     Ok(path.to_string_lossy().into_owned())
 }
 
