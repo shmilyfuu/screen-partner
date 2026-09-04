@@ -280,9 +280,8 @@ pub fn run() {
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 #[cfg(target_os = "macos")]
-                macos_window::allow_unconstrained_top_edge(&window).map_err(|error| {
-                    std::io::Error::new(std::io::ErrorKind::Other, error)
-                })?;
+                macos_window::allow_unconstrained_top_edge(&window)
+                    .map_err(std::io::Error::other)?;
 
                 restore_or_place_main_window(app.handle(), &window);
                 let _ = window.show();
