@@ -1,11 +1,14 @@
+mod gpu;
+#[cfg(target_os = "macos")]
+mod macos_window;
 mod telemetry;
 
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, sync::Mutex};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, PhysicalPosition, Position, RunEvent,
+    Manager, PhysicalPosition, Position, RunEvent, State,
 };
 
 const SETTINGS_SCHEMA_VERSION: u32 = 1;
@@ -26,9 +29,99 @@ struct Settings {
     window: WindowSettings,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct DragSession {
+    pointer_x: f64,
+    pointer_y: f64,
+    window_x: i32,
+    window_y: i32,
+    scale_factor: f64,
+}
+
+#[derive(Default)]
+struct DragState(Mutex<Option<DragSession>>);
+
 #[tauri::command]
 fn development_ui_enabled() -> bool {
     cfg!(debug_assertions) || option_env!("SCREEN_PARTNER_DEV_UI") == Some("1")
+}
+
+#[tauri::command]
+fn begin_window_drag(
+    app: tauri::AppHandle,
+    drag_state: State<'_, DragState>,
+    screen_x: f64,
+    screen_y: f64,
+) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window is unavailable".to_string())?;
+    let position = window
+        .outer_position()
+        .map_err(|error| format!("failed to read window position: {error}"))?;
+    let scale_factor = window
+        .scale_factor()
+        .map_err(|error| format!("failed to read window scale factor: {error}"))?;
+
+    let mut state = drag_state
+        .0
+        .lock()
+        .map_err(|_| "window drag state is unavailable".to_string())?;
+    *state = Some(DragSession {
+        pointer_x: screen_x,
+        pointer_y: screen_y,
+        window_x: position.x,
+        window_y: position.y,
+        scale_factor,
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+fn update_window_drag(
+    app: tauri::AppHandle,
+    drag_state: State<'_, DragState>,
+    screen_x: f64,
+    screen_y: f64,
+) -> Result<(), String> {
+    let session = {
+        let state = drag_state
+            .0
+            .lock()
+            .map_err(|_| "window drag state is unavailable".to_string())?;
+        *state
+    };
+    let Some(session) = session else {
+        return Ok(());
+    };
+
+    let delta_x = ((screen_x - session.pointer_x) * session.scale_factor).round();
+    let delta_y = ((screen_y - session.pointer_y) * session.scale_factor).round();
+    if !delta_x.is_finite() || !delta_y.is_finite() {
+        return Err("window drag coordinates are invalid".to_string());
+    }
+
+    let target_x = session.window_x.saturating_add(delta_x as i32);
+    let target_y = session.window_y.saturating_add(delta_y as i32);
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window is unavailable".to_string())?;
+    window
+        .set_position(Position::Physical(PhysicalPosition::new(
+            target_x, target_y,
+        )))
+        .map_err(|error| format!("failed to move window: {error}"))
+}
+
+#[tauri::command]
+fn end_window_drag(drag_state: State<'_, DragState>) -> Result<(), String> {
+    let mut state = drag_state
+        .0
+        .lock()
+        .map_err(|_| "window drag state is unavailable".to_string())?;
+    *state = None;
+    Ok(())
 }
 
 fn settings_path(app: &tauri::AppHandle) -> PathBuf {
@@ -177,9 +270,19 @@ fn recall_main_window(app: &tauri::AppHandle) {
 
 pub fn run() {
     let app = tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![development_ui_enabled])
+        .manage(DragState::default())
+        .invoke_handler(tauri::generate_handler![
+            development_ui_enabled,
+            begin_window_drag,
+            update_window_drag,
+            end_window_drag
+        ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
+                #[cfg(target_os = "macos")]
+                macos_window::allow_unconstrained_top_edge(&window)
+                    .map_err(std::io::Error::other)?;
+
                 restore_or_place_main_window(app.handle(), &window);
                 let _ = window.show();
             }
