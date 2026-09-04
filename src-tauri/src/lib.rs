@@ -1,3 +1,4 @@
+mod diagnostics;
 mod gpu;
 #[cfg(target_os = "macos")]
 mod macos_window;
@@ -273,6 +274,8 @@ pub fn run() {
         .manage(DragState::default())
         .invoke_handler(tauri::generate_handler![
             development_ui_enabled,
+            diagnostics::start_diagnostic_log,
+            diagnostics::append_diagnostic_log,
             begin_window_drag,
             update_window_drag,
             end_window_drag

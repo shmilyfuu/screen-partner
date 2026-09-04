@@ -78,10 +78,26 @@ body {
 .debug-metrics {
   width: 100%;
   overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
   font-size: 9px;
+  font-variant-numeric: tabular-nums;
   line-height: 1.15;
   text-align: center;
-  white-space: pre-line;
+  white-space: pre;
+}
+
+.debug-behavior-status {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  text-align: center;
+}
+
+.debug-behavior-status output {
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .debug-state-control {

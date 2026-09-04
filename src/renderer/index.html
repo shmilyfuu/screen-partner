@@ -21,13 +21,20 @@
       </div>
 
       <div class="debug-controls" data-debug-controls hidden>
-        <output class="debug-metrics" data-debug-metrics>
-          CPU -- · GPU -- · RAM --
-          D --/-- · N --/--
-        </output>
+        <output class="debug-metrics" data-debug-metrics>CPU   --  |  GPU   --  |  RAM   --
+D      --/     --  |  N      --/     --
+DP   --/     --  |  C N/A</output>
+        <div class="debug-behavior-status">
+          <span>
+            State <output data-debug-current-state>idle</output>
+          </span>
+          <span>
+            Trigger <output data-debug-current-trigger>Default</output>
+          </span>
+        </div>
         <label class="debug-state-control">
-          <span>State</span>
-          <select data-debug-state>
+          <span>Mode</span>
+          <select data-debug-state aria-label="Debug behavior mode">
             <option value="auto">Auto</option>
             <option value="idle">idle</option>
             <option value="running-right">running-right</option>
@@ -44,5 +51,6 @@
     </main>
 
     <script type="module" src="./main.js"></script>
+    <script type="module" src="./debug-platform-metrics.js"></script>
   </body>
 </html>
