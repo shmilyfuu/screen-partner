@@ -27,6 +27,7 @@ const spriteElement = document.querySelector("[data-pet-sprite]");
 const emptyStateElement = document.querySelector("[data-empty-state]");
 const debugControls = document.querySelector("[data-debug-controls]");
 const debugMetricsElement = document.querySelector("[data-debug-metrics]");
+const debugCurrentStateElement = document.querySelector("[data-debug-current-state]");
 const debugStateSelect = document.querySelector("[data-debug-state]");
 
 const renderer = new SpriteRenderer(spriteElement);
@@ -49,6 +50,13 @@ function showPetError(error) {
 function showPet() {
   emptyStateElement.hidden = true;
   spriteElement.hidden = false;
+}
+
+function updateCurrentState(state) {
+  if (debugCurrentStateElement) {
+    debugCurrentStateElement.textContent = state;
+  }
+  document.documentElement.dataset.petState = state;
 }
 
 function scheduleAnimationTick() {
@@ -314,13 +322,14 @@ async function initialize() {
       clock: runtimeClock,
       onFrame: (frameEvent) => renderer.renderFrame(frameEvent),
       onActionBoundary: ({ nextState, appliedDecision }) => {
-        debugStateSelect.dataset.currentState = nextState;
+        updateCurrentState(nextState);
         behaviorArbiter.consumeDecision(appliedDecision);
         submitArbiterDecision();
       },
     });
     animationPlayer.loadPet(pet);
     animationPlayer.start("idle");
+    updateCurrentState("idle");
     showPet();
     installPetDragging();
 
