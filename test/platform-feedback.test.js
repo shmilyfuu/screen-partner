@@ -42,10 +42,13 @@ test("disk pressure catches low throughput storage contention",()=>{
   assert.equal(s.load,null);
 });
 
-test("cursor feedback maps busy and background working",()=>{
+test("cursor feedback maps busy and background working with one-second exit debounce",()=>{
   const clock=new FakeClock(); const mapper=new SignalMapper({clock});
   let s=mapper.update(metrics({cursorFeedback:"busy",cursorFeedbackDetail:"IDC_WAIT"}));
   assert.equal(s.pressure?.state,"waiting"); assert.equal(s.pressure?.source,"cursor_busy");
+  clock.advance(1000);
+  s=mapper.update(metrics({cursorFeedback:"background_working",cursorFeedbackDetail:"IDC_APPSTARTING"}));
+  assert.equal(s.pressure?.source,"cursor_busy");
   clock.advance(1000);
   s=mapper.update(metrics({cursorFeedback:"background_working",cursorFeedbackDetail:"IDC_APPSTARTING"}));
   assert.equal(s.pressure,null); assert.equal(s.load?.state,"running"); assert.equal(s.load?.source,"cursor_background_working");
