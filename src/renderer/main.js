@@ -136,11 +136,12 @@ function formatRate(bytesPerSecond) {
 
   for (const [factor, suffix] of units) {
     if (value >= factor) {
-      return `${(value / factor).toFixed(1)}${suffix}`.padStart(7);
+      const amount = Math.min(value / factor, 999.9);
+      return `${amount.toFixed(1)}${suffix}`.padStart(7);
     }
   }
 
-  return `${Math.round(value)}B`.padStart(7);
+  return `${Math.min(Math.round(value), 1023)}B`.padStart(7);
 }
 
 function formatPercent(value) {
