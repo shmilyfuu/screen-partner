@@ -1,11 +1,21 @@
 import { AnimationPlayer } from "./core/animation-player.js";
+import {
+  BehaviorArbiter,
+  DECISION_PRIORITY,
+} from "./core/behavior-arbiter.js";
+import { SystemClock } from "./core/clock.js";
 import { PET_STATES } from "./core/normalized-pet.js";
+import {
+  SignalMapper,
+  SYSTEM_SIGNAL_KEYS,
+} from "./core/signal-mapper.js";
 import { loadCodexV1Pet } from "./codex-v1-manifest.js";
 import { SpriteRenderer } from "./sprite-renderer.js";
 
-const phase = "phase-3b";
+const phase = "phase-4";
 const DEFAULT_PET_MANIFEST = "./pets/development/pet.json";
 const SYSTEM_METRICS_EVENT = "system-metrics";
+const DEBUG_SIGNAL_KEY = "debug-state";
 
 document.documentElement.dataset.screenPartnerPhase = phase;
 
@@ -20,6 +30,9 @@ const debugMetricsElement = document.querySelector("[data-debug-metrics]");
 const debugStateSelect = document.querySelector("[data-debug-state]");
 
 const renderer = new SpriteRenderer(spriteElement);
+const runtimeClock = new SystemClock();
+const behaviorArbiter = new BehaviorArbiter({ clock: runtimeClock });
+const signalMapper = new SignalMapper({ clock: runtimeClock });
 let animationPlayer = null;
 let animationFrameRequest = null;
 let unlistenSystemMetrics = null;
@@ -45,19 +58,36 @@ function scheduleAnimationTick() {
   });
 }
 
+function submitArbiterDecision() {
+  if (!animationPlayer) {
+    return;
+  }
+
+  const decision = behaviorArbiter.decide();
+  if (decision) {
+    animationPlayer.requestDecision(decision);
+  } else {
+    animationPlayer.clearPendingDecision();
+  }
+}
+
 function requestDebugState(state) {
   if (!animationPlayer) {
     return;
   }
 
-  const nextState = state === "auto" ? "idle" : state;
-  animationPlayer.requestDecision({
-    state: nextState,
-    priority: 0,
-    source: "debug_menu",
-    reason: state === "auto" ? "restore_auto" : "manual_state",
-    requestedAt: performance.now(),
-  });
+  if (state === "auto") {
+    behaviorArbiter.clearContinuousSignal(DEBUG_SIGNAL_KEY);
+  } else {
+    behaviorArbiter.setContinuousSignal(DEBUG_SIGNAL_KEY, {
+      state,
+      priority: DECISION_PRIORITY.interaction,
+      source: "debug_menu",
+      reason: "manual_state",
+    });
+  }
+
+  submitArbiterDecision();
 }
 
 function formatRate(bytesPerSecond) {
@@ -97,10 +127,28 @@ function updateDebugMetrics(metrics) {
     `N ${formatRate(metrics.networkRxBps)}/${formatRate(metrics.networkTxBps)}`;
 }
 
+function applySystemSignals(snapshot) {
+  for (const [name, decision] of Object.entries(snapshot)) {
+    const key = SYSTEM_SIGNAL_KEYS[name];
+    if (decision) {
+      behaviorArbiter.setContinuousSignal(key, decision);
+    } else {
+      behaviorArbiter.clearContinuousSignal(key);
+    }
+  }
+}
+
 function handleSystemMetrics(metrics) {
   latestSystemMetrics = metrics;
   document.documentElement.dataset.telemetryReady = "true";
   updateDebugMetrics(metrics);
+
+  try {
+    applySystemSignals(signalMapper.update(metrics));
+    submitArbiterDecision();
+  } catch (error) {
+    console.warn("[screen-partner] system signal mapping failed", error);
+  }
 }
 
 async function subscribeSystemMetrics() {
@@ -263,9 +311,12 @@ async function initialize() {
 
     renderer.loadPet(pet, spritesheetUrl);
     animationPlayer = new AnimationPlayer({
+      clock: runtimeClock,
       onFrame: (frameEvent) => renderer.renderFrame(frameEvent),
-      onActionBoundary: ({ nextState }) => {
+      onActionBoundary: ({ nextState, appliedDecision }) => {
         debugStateSelect.dataset.currentState = nextState;
+        behaviorArbiter.consumeDecision(appliedDecision);
+        submitArbiterDecision();
       },
     });
     animationPlayer.loadPet(pet);
