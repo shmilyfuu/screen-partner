@@ -10,34 +10,34 @@ export const SYSTEM_SIGNAL_KEYS = Object.freeze({
 
 export const DEFAULT_SYSTEM_BEHAVIOR_RULES = Object.freeze({
   cpu: Object.freeze({
-    enterPercent: 75,
-    exitPercent: 60,
+    enterPercent: 60,
+    exitPercent: 50,
     enterDurationMs: 5_000,
-    exitDurationMs: 8_000,
+    exitDurationMs: 4_000,
   }),
   gpu: Object.freeze({
-    enterPercent: 80,
-    exitPercent: 60,
+    enterPercent: 75,
+    exitPercent: 55,
     enterDurationMs: 5_000,
-    exitDurationMs: 8_000,
+    exitDurationMs: 4_000,
   }),
   memoryPressure: Object.freeze({
     enterPercent: 92,
-    exitPercent: 85,
+    exitPercent: 90,
     enterDurationMs: 12_000,
-    exitDurationMs: 10_000,
+    exitDurationMs: 5_000,
   }),
   disk: Object.freeze({
     enterBps: 4_000_000,
-    exitBps: 1_000_000,
+    exitBps: 3_000_000,
     enterDurationMs: 3_000,
-    exitDurationMs: 5_000,
+    exitDurationMs: 3_000,
   }),
   network: Object.freeze({
     enterBps: 1_500_000,
-    exitBps: 400_000,
+    exitBps: 750_000,
     enterDurationMs: 3_000,
-    exitDurationMs: 5_000,
+    exitDurationMs: 3_000,
   }),
   waiting: Object.freeze({
     userIdleSeconds: 60,
