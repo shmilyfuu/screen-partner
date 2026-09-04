@@ -97,6 +97,7 @@ body {
 
 .debug-behavior-status output {
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .debug-state-control {
