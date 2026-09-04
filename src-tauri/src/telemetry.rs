@@ -1,4 +1,11 @@
+#[path = "disk_pressure.rs"]
+mod disk_pressure;
+#[path = "platform_feedback.rs"]
+mod platform_feedback;
+
 use crate::gpu::GpuSampler;
+use disk_pressure::DiskPressureSampler;
+use platform_feedback::sample_cursor_feedback;
 use serde::Serialize;
 use std::{
     thread,
@@ -19,8 +26,16 @@ pub struct SystemMetrics {
     pub memory_usage_percent: f32,
     pub disk_read_bps: u64,
     pub disk_write_bps: u64,
+    pub disk_activity_device: Option<String>,
+    pub disk_busy_percent: Option<f32>,
+    pub disk_latency_ms: Option<f32>,
+    pub disk_pressure_device: Option<String>,
     pub network_rx_bps: u64,
     pub network_tx_bps: u64,
+    pub network_activity_interface: Option<String>,
+    pub cursor_feedback: String,
+    pub cursor_feedback_detail: Option<String>,
+    pub cursor_feedback_token: Option<i64>,
     pub user_idle_seconds: Option<u64>,
 }
 
@@ -28,6 +43,7 @@ pub struct TelemetrySampler {
     system: System,
     gpu: GpuSampler,
     disks: Disks,
+    disk_pressure: DiskPressureSampler,
     networks: Networks,
     last_sampled_at: Instant,
 }
@@ -43,6 +59,8 @@ impl TelemetrySampler {
         let mut disks = Disks::new_with_refreshed_list();
         disks.refresh(true);
 
+        let disk_pressure = DiskPressureSampler::new();
+
         let mut networks = Networks::new_with_refreshed_list();
         networks.refresh(true);
 
@@ -50,6 +68,7 @@ impl TelemetrySampler {
             system,
             gpu,
             disks,
+            disk_pressure,
             networks,
             last_sampled_at: Instant::now(),
         }
@@ -65,20 +84,12 @@ impl TelemetrySampler {
         let elapsed = sampled_at.saturating_duration_since(self.last_sampled_at);
         self.last_sampled_at = sampled_at;
 
-        let disk_read_bytes = self
-            .disks
-            .list()
-            .iter()
-            .map(|disk| disk.usage().read_bytes)
-            .sum();
-        let disk_write_bytes = self
-            .disks
-            .list()
-            .iter()
-            .map(|disk| disk.usage().written_bytes)
-            .sum();
-        let network_rx_bytes = self.networks.values().map(|data| data.received()).sum();
-        let network_tx_bytes = self.networks.values().map(|data| data.transmitted()).sum();
+        let (disk_read_bps, disk_write_bps, disk_activity_device) =
+            busiest_disk_rates(&self.disks, elapsed);
+        let disk_pressure = self.disk_pressure.sample();
+        let (network_rx_bps, network_tx_bps, network_activity_interface) =
+            busiest_network_rates(&self.networks, elapsed);
+        let cursor_feedback = sample_cursor_feedback();
 
         SystemMetrics {
             timestamp_ms: unix_timestamp_ms(),
@@ -88,10 +99,18 @@ impl TelemetrySampler {
                 self.system.used_memory(),
                 self.system.total_memory(),
             ),
-            disk_read_bps: bytes_per_second(disk_read_bytes, elapsed),
-            disk_write_bps: bytes_per_second(disk_write_bytes, elapsed),
-            network_rx_bps: bytes_per_second(network_rx_bytes, elapsed),
-            network_tx_bps: bytes_per_second(network_tx_bytes, elapsed),
+            disk_read_bps,
+            disk_write_bps,
+            disk_activity_device,
+            disk_busy_percent: disk_pressure.busy_percent,
+            disk_latency_ms: disk_pressure.latency_ms,
+            disk_pressure_device: disk_pressure.device,
+            network_rx_bps,
+            network_tx_bps,
+            network_activity_interface,
+            cursor_feedback: cursor_feedback.kind,
+            cursor_feedback_detail: cursor_feedback.raw,
+            cursor_feedback_token: None,
             user_idle_seconds: None,
         }
     }
@@ -118,6 +137,39 @@ pub fn start_telemetry(app: AppHandle) {
                 }
             }
         });
+}
+
+fn busiest_disk_rates(disks: &Disks, elapsed: Duration) -> (u64, u64, Option<String>) {
+    disks
+        .list()
+        .iter()
+        .map(|disk| {
+            let usage = disk.usage();
+            let read_bps = bytes_per_second(usage.read_bytes, elapsed);
+            let write_bps = bytes_per_second(usage.written_bytes, elapsed);
+            (
+                read_bps,
+                write_bps,
+                Some(disk.name().to_string_lossy().into_owned()),
+            )
+        })
+        .max_by_key(|(read_bps, write_bps, _)| read_bps.saturating_add(*write_bps))
+        .unwrap_or((0, 0, None))
+}
+
+fn busiest_network_rates(
+    networks: &Networks,
+    elapsed: Duration,
+) -> (u64, u64, Option<String>) {
+    networks
+        .iter()
+        .map(|(name, data)| {
+            let rx_bps = bytes_per_second(data.received(), elapsed);
+            let tx_bps = bytes_per_second(data.transmitted(), elapsed);
+            (rx_bps, tx_bps, Some(name.clone()))
+        })
+        .max_by_key(|(rx_bps, tx_bps, _)| rx_bps.saturating_add(*tx_bps))
+        .unwrap_or((0, 0, None))
 }
 
 fn unix_timestamp_ms() -> u64 {
@@ -172,8 +224,16 @@ mod tests {
             memory_usage_percent: 34.5,
             disk_read_bps: 10,
             disk_write_bps: 20,
+            disk_activity_device: Some("Disk 0".to_string()),
+            disk_busy_percent: Some(70.0),
+            disk_latency_ms: Some(12.5),
+            disk_pressure_device: Some("Disk 0".to_string()),
             network_rx_bps: 30,
             network_tx_bps: 40,
+            network_activity_interface: Some("Ethernet".to_string()),
+            cursor_feedback: "busy".to_string(),
+            cursor_feedback_detail: Some("IDC_WAIT".to_string()),
+            cursor_feedback_token: None,
             user_idle_seconds: None,
         };
 
@@ -184,8 +244,16 @@ mod tests {
         assert_eq!(value["memoryUsagePercent"], 34.5);
         assert_eq!(value["diskReadBps"], 10);
         assert_eq!(value["diskWriteBps"], 20);
+        assert_eq!(value["diskActivityDevice"], "Disk 0");
+        assert_eq!(value["diskBusyPercent"], 70.0);
+        assert_eq!(value["diskLatencyMs"], 12.5);
+        assert_eq!(value["diskPressureDevice"], "Disk 0");
         assert_eq!(value["networkRxBps"], 30);
         assert_eq!(value["networkTxBps"], 40);
+        assert_eq!(value["networkActivityInterface"], "Ethernet");
+        assert_eq!(value["cursorFeedback"], "busy");
+        assert_eq!(value["cursorFeedbackDetail"], "IDC_WAIT");
+        assert!(value["cursorFeedbackToken"].is_null());
         assert!(value["userIdleSeconds"].is_null());
     }
 }
