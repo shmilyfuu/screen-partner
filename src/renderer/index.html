@@ -22,13 +22,19 @@
 
       <div class="debug-controls" data-debug-controls hidden>
         <output class="debug-metrics" data-debug-metrics>
-          CPU -- · GPU -- · RAM --
-          D --/-- · N --/--
+CPU   -- · GPU   -- · RAM   --
+D     --/    -- · N     --/    --
         </output>
-        <label class="debug-state-control">
-          <span class="debug-current-state">
+        <div class="debug-behavior-status">
+          <span>
             State <output data-debug-current-state>idle</output>
           </span>
+          <span>
+            Trigger <output data-debug-current-trigger>Default</output>
+          </span>
+        </div>
+        <label class="debug-state-control">
+          <span>Mode</span>
           <select data-debug-state aria-label="Debug behavior mode">
             <option value="auto">Auto</option>
             <option value="idle">idle</option>
