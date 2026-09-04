@@ -242,7 +242,7 @@ mod platform {
             format: u32,
             buffer_size: *mut u32,
             item_count: *mut u32,
-            item_buffer: *mut PdhFormattedCounterValueItemW,
+            item_buffer: *mut c_void,
         ) -> PdhStatus;
         fn PdhCloseQuery(query: PdhQuery) -> PdhStatus;
     }
