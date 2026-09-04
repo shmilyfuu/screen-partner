@@ -51,7 +51,7 @@ unsafe fn install_unconstrained_frame(window: &tauri::WebviewWindow) -> Result<(
         return Err("NSWindow pointer is unavailable".to_string());
     }
 
-    let class = object_getClass(ns_window.cast_const());
+    let class = object_getClass(ns_window as *const c_void);
     if class.is_null() {
         return Err("NSWindow class is unavailable".to_string());
     }
@@ -61,6 +61,8 @@ unsafe fn install_unconstrained_frame(window: &tauri::WebviewWindow) -> Result<(
         return Err("constrainFrameRect selector is unavailable".to_string());
     }
 
+    // Tao's window class inherits AppKit's top-edge constraint. Adding the
+    // method to the concrete class overrides the inherited implementation.
     let implementation = unconstrained_frame_rect as *const () as *const c_void;
     let types = b"{CGRect={CGPoint=dd}{CGSize=dd}}@:{CGRect={CGPoint=dd}{CGSize=dd}}@\0";
     if class_addMethod(class, selector, implementation, types.as_ptr().cast()) == 0 {
