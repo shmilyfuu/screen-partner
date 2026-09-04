@@ -63,11 +63,8 @@ mod platform {
 
     #[link(name = "pdh")]
     extern "system" {
-        fn PdhOpenQueryW(
-            data_source: *const u16,
-            user_data: usize,
-            query: *mut *mut c_void,
-        ) -> i32;
+        fn PdhOpenQueryW(data_source: *const u16, user_data: usize, query: *mut *mut c_void)
+            -> i32;
         fn PdhAddEnglishCounterW(
             query: *mut c_void,
             full_counter_path: *const u16,
@@ -127,7 +124,8 @@ mod platform {
             }
 
             let busy_path = wide("\\PhysicalDisk(*)\\% Disk Time");
-            if PdhAddEnglishCounterW(self.query, busy_path.as_ptr(), 0, &mut self.busy_counter) != 0 {
+            if PdhAddEnglishCounterW(self.query, busy_path.as_ptr(), 0, &mut self.busy_counter) != 0
+            {
                 return false;
             }
 
@@ -400,7 +398,8 @@ mod platform {
         }
 
         let mut iterator = 0;
-        if IOServiceGetMatchingServices(0, matching, &mut iterator) != KERN_SUCCESS || iterator == 0 {
+        if IOServiceGetMatchingServices(0, matching, &mut iterator) != KERN_SUCCESS || iterator == 0
+        {
             return HashMap::new();
         }
 
@@ -428,7 +427,10 @@ mod platform {
         if IORegistryEntryGetName(entry, buffer.as_mut_ptr()) != KERN_SUCCESS {
             return "disk".to_string();
         }
-        let len = buffer.iter().position(|byte| *byte == 0).unwrap_or(buffer.len());
+        let len = buffer
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(buffer.len());
         let bytes = std::slice::from_raw_parts(buffer.as_ptr().cast::<u8>(), len);
         String::from_utf8_lossy(bytes).into_owned()
     }
@@ -458,7 +460,8 @@ mod platform {
         let total_read = dictionary_u64(statistics, c"Total Time (Read)".as_ptr()).unwrap_or(0);
         let total_write = dictionary_u64(statistics, c"Total Time (Write)".as_ptr()).unwrap_or(0);
         let latent_read = dictionary_u64(statistics, c"Latency Time (Read)".as_ptr()).unwrap_or(0);
-        let latent_write = dictionary_u64(statistics, c"Latency Time (Write)".as_ptr()).unwrap_or(0);
+        let latent_write =
+            dictionary_u64(statistics, c"Latency Time (Write)".as_ptr()).unwrap_or(0);
         CFRelease(properties);
 
         Some(RawStats {
@@ -480,7 +483,11 @@ mod platform {
         }
 
         let mut value = 0i64;
-        if CFNumberGetValue(number, K_CF_NUMBER_SINT64_TYPE, (&mut value as *mut i64).cast()) != 0
+        if CFNumberGetValue(
+            number,
+            K_CF_NUMBER_SINT64_TYPE,
+            (&mut value as *mut i64).cast(),
+        ) != 0
             && value >= 0
         {
             Some(value as u64)
