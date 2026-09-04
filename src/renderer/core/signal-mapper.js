@@ -1,145 +1,20 @@
 import { DECISION_PRIORITY } from "./behavior-arbiter.js";
 import { SystemClock } from "./clock.js";
+import {
+  DEFAULT_SYSTEM_BEHAVIOR_RULES,
+  DiskActivityGate,
+  TimedHysteresisGate,
+  decisionSummary,
+  finiteNumber,
+  nonNegativeRate,
+  normalizeCursorFeedback,
+  optionalNumber,
+  optionalPercent,
+  optionalString,
+} from "./signal-rules-gates.js";
 
-export const SYSTEM_SIGNAL_KEYS = Object.freeze({
-  fallback: "system-default",
-  waiting: "system-waiting",
-  load: "system-load",
-  pressure: "system-pressure",
-});
-
-export const DEFAULT_SYSTEM_BEHAVIOR_RULES = Object.freeze({
-  cpu: Object.freeze({
-    enterPercent: 60,
-    exitPercent: 50,
-    enterDurationMs: 5_000,
-    exitDurationMs: 4_000,
-  }),
-  gpu: Object.freeze({
-    enterPercent: 75,
-    exitPercent: 55,
-    enterDurationMs: 5_000,
-    exitDurationMs: 4_000,
-  }),
-  memoryPressure: Object.freeze({
-    enterPercent: 92,
-    exitPercent: 90,
-    enterDurationMs: 12_000,
-    exitDurationMs: 5_000,
-  }),
-  disk: Object.freeze({
-    enterBps: 4_000_000,
-    exitBps: 3_000_000,
-    enterDurationMs: 3_000,
-    exitDurationMs: 3_000,
-  }),
-  network: Object.freeze({
-    enterBps: 1_500_000,
-    exitBps: 750_000,
-    enterDurationMs: 3_000,
-    exitDurationMs: 3_000,
-  }),
-  waiting: Object.freeze({
-    userIdleSeconds: 60,
-    maxCpuPercent: 8,
-    maxGpuPercent: 15,
-    maxMemoryPercent: 68,
-    maxDiskBps: 200_000,
-    maxNetworkBps: 100_000,
-  }),
-  maxSampleGapMs: 2_500,
-});
-
-class TimedHysteresisGate {
-  #enterDurationMs;
-  #exitDurationMs;
-  #active = false;
-  #enterSince = null;
-  #exitSince = null;
-
-  constructor({ enterDurationMs, exitDurationMs }) {
-    this.#enterDurationMs = enterDurationMs;
-    this.#exitDurationMs = exitDurationMs;
-  }
-
-  reset() {
-    this.#active = false;
-    this.#enterSince = null;
-    this.#exitSince = null;
-  }
-
-  update({ enterCondition, exitCondition, now }) {
-    if (!this.#active) {
-      this.#exitSince = null;
-      if (!enterCondition) {
-        this.#enterSince = null;
-        return false;
-      }
-
-      this.#enterSince ??= now;
-      if (now - this.#enterSince >= this.#enterDurationMs) {
-        this.#active = true;
-        this.#enterSince = null;
-      }
-      return this.#active;
-    }
-
-    this.#enterSince = null;
-    if (!exitCondition) {
-      this.#exitSince = null;
-      return true;
-    }
-
-    this.#exitSince ??= now;
-    if (now - this.#exitSince >= this.#exitDurationMs) {
-      this.#active = false;
-      this.#exitSince = null;
-    }
-    return this.#active;
-  }
-
-  getSnapshot(now) {
-    return Object.freeze({
-      active: this.#active,
-      enterSince: this.#enterSince,
-      exitSince: this.#exitSince,
-      enterElapsedMs:
-        this.#enterSince === null ? 0 : Math.max(0, now - this.#enterSince),
-      exitElapsedMs:
-        this.#exitSince === null ? 0 : Math.max(0, now - this.#exitSince),
-    });
-  }
-}
-
-function finiteNumber(value, fallback = 0) {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : fallback;
-}
-
-function optionalPercent(value) {
-  if (value === null || value === undefined) {
-    return null;
-  }
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
-}
-
-function nonNegativeRate(...values) {
-  return values.reduce((total, value) => total + Math.max(0, finiteNumber(value)), 0);
-}
-
-function decisionSummary(decision) {
-  if (!decision) {
-    return null;
-  }
-
-  return Object.freeze({
-    state: decision.state,
-    priority: decision.priority,
-    source: decision.source,
-    reason: decision.reason,
-  });
-}
+export { DEFAULT_SYSTEM_BEHAVIOR_RULES, SYSTEM_SIGNAL_KEYS } from "./signal-rules-gates.js";
+import { SYSTEM_SIGNAL_KEYS } from "./signal-rules-gates.js";
 
 export class SignalMapper {
   #clock;
@@ -149,8 +24,11 @@ export class SignalMapper {
   #cpuGate;
   #gpuGate;
   #memoryPressureGate;
-  #diskGate;
+  #diskActivityGate;
+  #diskPressureGate;
   #networkGate;
+  #cursorBusyGate;
+  #cursorBackgroundGate;
 
   constructor({ clock = new SystemClock(), rules = DEFAULT_SYSTEM_BEHAVIOR_RULES } = {}) {
     if (!clock || typeof clock.now !== "function") {
@@ -162,8 +40,20 @@ export class SignalMapper {
     this.#cpuGate = new TimedHysteresisGate(rules.cpu);
     this.#gpuGate = new TimedHysteresisGate(rules.gpu);
     this.#memoryPressureGate = new TimedHysteresisGate(rules.memoryPressure);
-    this.#diskGate = new TimedHysteresisGate(rules.disk);
+    this.#diskActivityGate = new DiskActivityGate({
+      diskRules: rules.disk,
+      activityRules: rules.diskActivity,
+    });
+    this.#diskPressureGate = new TimedHysteresisGate(rules.diskPressure);
     this.#networkGate = new TimedHysteresisGate(rules.network);
+    this.#cursorBusyGate = new TimedHysteresisGate({
+      enterDurationMs: 0,
+      exitDurationMs: rules.cursorFeedback.exitDurationMs,
+    });
+    this.#cursorBackgroundGate = new TimedHysteresisGate({
+      enterDurationMs: 0,
+      exitDurationMs: rules.cursorFeedback.exitDurationMs,
+    });
   }
 
   update(metrics) {
@@ -187,9 +77,12 @@ export class SignalMapper {
     const diskReadBps = nonNegativeRate(metrics.diskReadBps);
     const diskWriteBps = nonNegativeRate(metrics.diskWriteBps);
     const diskBps = diskReadBps + diskWriteBps;
+    const diskBusyPercent = optionalPercent(metrics.diskBusyPercent);
+    const diskLatencyMs = optionalNumber(metrics.diskLatencyMs);
     const networkRxBps = nonNegativeRate(metrics.networkRxBps);
     const networkTxBps = nonNegativeRate(metrics.networkTxBps);
     const networkBps = networkRxBps + networkTxBps;
+    const cursorFeedback = normalizeCursorFeedback(metrics.cursorFeedback);
 
     const cpuEnterCondition = cpu >= this.#rules.cpu.enterPercent;
     const cpuExitCondition = cpu <= this.#rules.cpu.exitPercent;
@@ -197,10 +90,22 @@ export class SignalMapper {
     const gpuExitCondition = gpu === null || gpu <= this.#rules.gpu.exitPercent;
     const memoryEnterCondition = memory >= this.#rules.memoryPressure.enterPercent;
     const memoryExitCondition = memory <= this.#rules.memoryPressure.exitPercent;
-    const diskEnterCondition = diskBps >= this.#rules.disk.enterBps;
-    const diskExitCondition = diskBps <= this.#rules.disk.exitBps;
+    const diskPressureEnterCondition =
+      (diskBusyPercent !== null &&
+        diskBusyPercent >= this.#rules.diskPressure.enterPercent) ||
+      (diskLatencyMs !== null &&
+        diskLatencyMs >= this.#rules.diskPressure.enterLatencyMs);
+    const diskPressureExitCondition =
+      (diskBusyPercent === null ||
+        diskBusyPercent <= this.#rules.diskPressure.exitPercent) &&
+      (diskLatencyMs === null ||
+        diskLatencyMs <= this.#rules.diskPressure.exitLatencyMs);
     const networkEnterCondition = networkBps >= this.#rules.network.enterBps;
     const networkExitCondition = networkBps <= this.#rules.network.exitBps;
+    const cursorBusyEnterCondition = cursorFeedback === "busy";
+    const cursorBusyExitCondition = cursorFeedback !== "busy";
+    const cursorBackgroundEnterCondition = cursorFeedback === "background_working";
+    const cursorBackgroundExitCondition = cursorFeedback !== "background_working";
 
     const cpuBusy = this.#cpuGate.update({
       enterCondition: cpuEnterCondition,
@@ -217,9 +122,10 @@ export class SignalMapper {
       exitCondition: memoryExitCondition,
       now,
     });
-    const diskBusy = this.#diskGate.update({
-      enterCondition: diskEnterCondition,
-      exitCondition: diskExitCondition,
+    const diskActivity = this.#diskActivityGate.update({ valueBps: diskBps, now });
+    const diskPressure = this.#diskPressureGate.update({
+      enterCondition: diskPressureEnterCondition,
+      exitCondition: diskPressureExitCondition,
       now,
     });
     const networkBusy = this.#networkGate.update({
@@ -227,6 +133,20 @@ export class SignalMapper {
       exitCondition: networkExitCondition,
       now,
     });
+    const cursorBusy = this.#cursorBusyGate.update({
+      enterCondition: cursorBusyEnterCondition,
+      exitCondition: cursorBusyExitCondition,
+      now,
+    });
+    const cursorBackground = this.#cursorBackgroundGate.update({
+      enterCondition: cursorBackgroundEnterCondition,
+      exitCondition: cursorBackgroundExitCondition,
+      now,
+    });
+
+    const diskSnapshot = this.#diskActivityGate.getSnapshot(now);
+    const diskExitCondition = diskBps <= diskSnapshot.exitThresholdBps;
+    const diskEnterCondition = diskBps >= this.#rules.disk.enterBps;
 
     const snapshot = Object.freeze({
       fallback: {
@@ -236,15 +156,15 @@ export class SignalMapper {
         reason: "normal system activity",
       },
       waiting: this.#waitingDecision({ metrics, cpu, gpu, memory, diskBps, networkBps }),
-      load: this.#loadDecision({ cpuBusy, gpuBusy, diskBusy, networkBusy }),
-      pressure: memoryPressure
-        ? {
-            state: "failed",
-            priority: DECISION_PRIORITY.systemPressure,
-            source: "memory_pressure",
-            reason: "sustained memory pressure",
-          }
-        : null,
+      load: this.#loadDecision({
+        cursorBackground,
+        cpuBusy,
+        gpuBusy,
+        diskActivity,
+        diskPressure,
+        networkBusy,
+      }),
+      pressure: this.#pressureDecision({ memoryPressure, cursorBusy }),
     });
 
     this.#lastDiagnostics = Object.freeze({
@@ -258,9 +178,17 @@ export class SignalMapper {
         diskReadBps,
         diskWriteBps,
         diskTotalBps: diskBps,
+        diskBusyPercent,
+        diskLatencyMs,
+        diskActivityDevice: optionalString(metrics.diskActivityDevice),
+        diskPressureDevice: optionalString(metrics.diskPressureDevice),
         networkRxBps,
         networkTxBps,
         networkTotalBps: networkBps,
+        networkActivityInterface: optionalString(metrics.networkActivityInterface),
+        cursorFeedback,
+        cursorFeedbackDetail: optionalString(metrics.cursorFeedbackDetail),
+        cursorFeedbackToken: optionalNumber(metrics.cursorFeedbackToken),
         userIdleSeconds:
           metrics.userIdleSeconds === null || metrics.userIdleSeconds === undefined
             ? null
@@ -303,17 +231,32 @@ export class SignalMapper {
           enterDurationMs: this.#rules.memoryPressure.enterDurationMs,
           exitDurationMs: this.#rules.memoryPressure.exitDurationMs,
         }),
-        disk: this.#gateDiagnostics({
-          gate: this.#diskGate,
-          now,
+        disk: Object.freeze({
+          ...diskSnapshot,
           value: diskBps,
           unit: "bytesPerSecond",
           enterCondition: diskEnterCondition,
           exitCondition: diskExitCondition,
           enterThreshold: this.#rules.disk.enterBps,
-          exitThreshold: this.#rules.disk.exitBps,
+          exitThreshold: diskSnapshot.exitThresholdBps,
+          exitFloorThreshold: this.#rules.disk.exitBps,
           enterDurationMs: this.#rules.disk.enterDurationMs,
           exitDurationMs: this.#rules.disk.exitDurationMs,
+        }),
+        diskPressure: this.#gateDiagnostics({
+          gate: this.#diskPressureGate,
+          now,
+          value: diskBusyPercent,
+          unit: "percent",
+          enterCondition: diskPressureEnterCondition,
+          exitCondition: diskPressureExitCondition,
+          enterThreshold: this.#rules.diskPressure.enterPercent,
+          exitThreshold: this.#rules.diskPressure.exitPercent,
+          enterDurationMs: this.#rules.diskPressure.enterDurationMs,
+          exitDurationMs: this.#rules.diskPressure.exitDurationMs,
+          latencyMs: diskLatencyMs,
+          enterLatencyMs: this.#rules.diskPressure.enterLatencyMs,
+          exitLatencyMs: this.#rules.diskPressure.exitLatencyMs,
         }),
         network: this.#gateDiagnostics({
           gate: this.#networkGate,
@@ -326,6 +269,30 @@ export class SignalMapper {
           exitThreshold: this.#rules.network.exitBps,
           enterDurationMs: this.#rules.network.enterDurationMs,
           exitDurationMs: this.#rules.network.exitDurationMs,
+        }),
+        cursorBusy: this.#gateDiagnostics({
+          gate: this.#cursorBusyGate,
+          now,
+          value: cursorFeedback,
+          unit: "cursorFeedback",
+          enterCondition: cursorBusyEnterCondition,
+          exitCondition: cursorBusyExitCondition,
+          enterThreshold: "busy",
+          exitThreshold: "not_busy",
+          enterDurationMs: 0,
+          exitDurationMs: this.#rules.cursorFeedback.exitDurationMs,
+        }),
+        cursorBackground: this.#gateDiagnostics({
+          gate: this.#cursorBackgroundGate,
+          now,
+          value: cursorFeedback,
+          unit: "cursorFeedback",
+          enterCondition: cursorBackgroundEnterCondition,
+          exitCondition: cursorBackgroundExitCondition,
+          enterThreshold: "background_working",
+          exitThreshold: "not_background_working",
+          enterDurationMs: 0,
+          exitDurationMs: this.#rules.cursorFeedback.exitDurationMs,
         }),
       }),
       decisions: Object.freeze({
@@ -354,6 +321,7 @@ export class SignalMapper {
     exitThreshold,
     enterDurationMs,
     exitDurationMs,
+    ...extra
   }) {
     return Object.freeze({
       ...gate.getSnapshot(now),
@@ -365,10 +333,49 @@ export class SignalMapper {
       exitThreshold,
       enterDurationMs,
       exitDurationMs,
+      ...extra,
     });
   }
 
-  #loadDecision({ cpuBusy, gpuBusy, diskBusy, networkBusy }) {
+  #pressureDecision({ memoryPressure, cursorBusy }) {
+    if (memoryPressure) {
+      return {
+        state: "failed",
+        priority: DECISION_PRIORITY.systemPressure,
+        source: "memory_pressure",
+        reason: "sustained memory pressure",
+      };
+    }
+
+    if (cursorBusy) {
+      return {
+        state: "waiting",
+        priority: DECISION_PRIORITY.systemPressure,
+        source: "cursor_busy",
+        reason: "system busy cursor feedback",
+      };
+    }
+
+    return null;
+  }
+
+  #loadDecision({
+    cursorBackground,
+    cpuBusy,
+    gpuBusy,
+    diskActivity,
+    diskPressure,
+    networkBusy,
+  }) {
+    if (cursorBackground) {
+      return {
+        state: "running",
+        priority: DECISION_PRIORITY.highLoad,
+        source: "cursor_background_working",
+        reason: "system background-working cursor feedback",
+      };
+    }
+
     if (cpuBusy || gpuBusy) {
       let source = "cpu_busy";
       if (cpuBusy && gpuBusy) {
@@ -385,10 +392,11 @@ export class SignalMapper {
       };
     }
 
+    const diskBusy = diskActivity || diskPressure;
     if (diskBusy || networkBusy) {
-      let source = "disk_active";
+      let source = diskPressure ? "disk_pressure" : "disk_active";
       if (diskBusy && networkBusy) {
-        source = "disk_network_active";
+        source = diskPressure ? "disk_pressure_network_active" : "disk_network_active";
       } else if (networkBusy) {
         source = "network_active";
       }
@@ -397,7 +405,7 @@ export class SignalMapper {
         state: "running",
         priority: DECISION_PRIORITY.highLoad,
         source,
-        reason: "sustained io activity",
+        reason: diskPressure ? "disk pressure or io activity" : "sustained io activity",
       };
     }
 
@@ -439,7 +447,10 @@ export class SignalMapper {
     this.#cpuGate.reset();
     this.#gpuGate.reset();
     this.#memoryPressureGate.reset();
-    this.#diskGate.reset();
+    this.#diskActivityGate.reset();
+    this.#diskPressureGate.reset();
     this.#networkGate.reset();
+    this.#cursorBusyGate.reset();
+    this.#cursorBackgroundGate.reset();
   }
 }
