@@ -157,10 +157,7 @@ fn busiest_disk_rates(disks: &Disks, elapsed: Duration) -> (u64, u64, Option<Str
         .unwrap_or((0, 0, None))
 }
 
-fn busiest_network_rates(
-    networks: &Networks,
-    elapsed: Duration,
-) -> (u64, u64, Option<String>) {
+fn busiest_network_rates(networks: &Networks, elapsed: Duration) -> (u64, u64, Option<String>) {
     networks
         .iter()
         .map(|(name, data)| {
