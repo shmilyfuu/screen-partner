@@ -2,8 +2,10 @@ const SYSTEM_METRICS_EVENT = "system-metrics";
 const NEW_TRIGGER_LABELS = Object.freeze({
   disk_pressure: "Disk Pressure",
   disk_pressure_network: "Disk Pressure+Network",
+  disk_pressure_network_active: "Disk Pressure+Network",
   cursor_busy: "Cursor Busy",
   cursor_working: "Cursor Working",
+  cursor_background_working: "Cursor Working",
 });
 
 const metricsElement = document.querySelector("[data-debug-metrics]");
