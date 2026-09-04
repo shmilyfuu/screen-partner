@@ -8,7 +8,11 @@ import {
 } from "../src/renderer/core/behavior-arbiter.js";
 import { FakeClock } from "../src/renderer/core/clock.js";
 import { createNormalizedPet } from "../src/renderer/core/normalized-pet.js";
-import { SignalMapper, SYSTEM_SIGNAL_KEYS } from "../src/renderer/core/signal-mapper.js";
+import {
+  DEFAULT_SYSTEM_BEHAVIOR_RULES,
+  SignalMapper,
+  SYSTEM_SIGNAL_KEYS,
+} from "../src/renderer/core/signal-mapper.js";
 
 function metrics(overrides = {}) {
   return {
@@ -53,31 +57,74 @@ function createBehaviorTestPet() {
   });
 }
 
-test("CPU busy requires sustained load and hysteresis before exit", () => {
+test("system behavior defaults use the accepted Phase 4 thresholds", () => {
+  assert.deepEqual(DEFAULT_SYSTEM_BEHAVIOR_RULES.cpu, {
+    enterPercent: 60,
+    exitPercent: 50,
+    enterDurationMs: 5_000,
+    exitDurationMs: 4_000,
+  });
+  assert.deepEqual(DEFAULT_SYSTEM_BEHAVIOR_RULES.gpu, {
+    enterPercent: 75,
+    exitPercent: 55,
+    enterDurationMs: 5_000,
+    exitDurationMs: 4_000,
+  });
+  assert.deepEqual(DEFAULT_SYSTEM_BEHAVIOR_RULES.disk, {
+    enterBps: 4_000_000,
+    exitBps: 3_000_000,
+    enterDurationMs: 3_000,
+    exitDurationMs: 3_000,
+  });
+  assert.deepEqual(DEFAULT_SYSTEM_BEHAVIOR_RULES.network, {
+    enterBps: 1_500_000,
+    exitBps: 750_000,
+    enterDurationMs: 3_000,
+    exitDurationMs: 3_000,
+  });
+});
+
+test("CPU busy enters at 60 percent after five seconds and exits after four low seconds", () => {
   const clock = new FakeClock();
   const mapper = new SignalMapper({ clock });
 
-  let snapshot = mapper.update(metrics({ cpuUsagePercent: 80 }));
+  let snapshot = mapper.update(metrics({ cpuUsagePercent: 60 }));
   assert.equal(snapshot.load, null);
   for (let second = 1; second < 5; second += 1) {
     clock.advance(1_000);
-    snapshot = mapper.update(metrics({ cpuUsagePercent: 80 }));
+    snapshot = mapper.update(metrics({ cpuUsagePercent: 60 }));
     assert.equal(snapshot.load, null);
   }
   clock.advance(1_000);
-  snapshot = mapper.update(metrics({ cpuUsagePercent: 80 }));
+  snapshot = mapper.update(metrics({ cpuUsagePercent: 60 }));
   assert.equal(snapshot.load.state, "review");
 
   clock.advance(1_000);
-  assert.equal(mapper.update(metrics({ cpuUsagePercent: 70 })).load.state, "review");
+  assert.equal(mapper.update(metrics({ cpuUsagePercent: 55 })).load.state, "review");
 
-  for (let second = 0; second < 8; second += 1) {
+  clock.advance(1_000);
+  snapshot = mapper.update(metrics({ cpuUsagePercent: 50 }));
+  assert.equal(snapshot.load.state, "review");
+  for (let second = 1; second < 4; second += 1) {
     clock.advance(1_000);
-    snapshot = mapper.update(metrics({ cpuUsagePercent: 55 }));
+    snapshot = mapper.update(metrics({ cpuUsagePercent: 50 }));
     assert.equal(snapshot.load.state, "review");
   }
   clock.advance(1_000);
-  assert.equal(mapper.update(metrics({ cpuUsagePercent: 55 })).load, null);
+  assert.equal(mapper.update(metrics({ cpuUsagePercent: 50 })).load, null);
+});
+
+test("GPU busy enters at 75 percent after five seconds", () => {
+  const clock = new FakeClock();
+  const mapper = new SignalMapper({ clock });
+
+  let snapshot = mapper.update(metrics({ gpuUsagePercent: 75 }));
+  for (let second = 0; second < 5; second += 1) {
+    clock.advance(1_000);
+    snapshot = mapper.update(metrics({ gpuUsagePercent: 75 }));
+  }
+  assert.equal(snapshot.load.state, "review");
+  assert.equal(snapshot.load.source, "gpu_busy");
 });
 
 test("short disk and network bursts do not trigger running", () => {
@@ -107,19 +154,33 @@ test("short disk and network bursts do not trigger running", () => {
   assert.equal(load.source, "disk_network_active");
 });
 
-test("GPU utilization maps to review while unavailable GPU telemetry stays neutral", () => {
+test("disk activity clears after three seconds below the recovery threshold", () => {
+  const clock = new FakeClock();
+  const mapper = new SignalMapper({ clock });
+
+  let snapshot = mapper.update(metrics({ diskWriteBps: 5_000_000 }));
+  for (let second = 0; second < 3; second += 1) {
+    clock.advance(1_000);
+    snapshot = mapper.update(metrics({ diskWriteBps: 5_000_000 }));
+  }
+  assert.equal(snapshot.load.state, "running");
+
+  clock.advance(1_000);
+  snapshot = mapper.update(metrics({ diskWriteBps: 2_500_000 }));
+  assert.equal(snapshot.load.state, "running");
+  clock.advance(1_000);
+  assert.equal(mapper.update(metrics({ diskWriteBps: 2_500_000 })).load.state, "running");
+  clock.advance(1_000);
+  assert.equal(mapper.update(metrics({ diskWriteBps: 2_500_000 })).load.state, "running");
+  clock.advance(1_000);
+  assert.equal(mapper.update(metrics({ diskWriteBps: 2_500_000 })).load, null);
+});
+
+test("unavailable GPU telemetry stays neutral", () => {
   const clock = new FakeClock();
   const mapper = new SignalMapper({ clock });
 
   assert.equal(mapper.update(metrics({ gpuUsagePercent: null })).load, null);
-  mapper.update(metrics({ gpuUsagePercent: 90 }));
-  let load = null;
-  for (let second = 0; second < 5; second += 1) {
-    clock.advance(1_000);
-    load = mapper.update(metrics({ gpuUsagePercent: 90 })).load;
-  }
-  assert.equal(load.state, "review");
-  assert.equal(load.source, "gpu_busy");
 });
 
 test("memory pressure outranks sustained compute load", () => {
