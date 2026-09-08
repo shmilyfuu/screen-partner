@@ -18,10 +18,15 @@ import {
 import { loadCodexV1Pet } from "./codex-v1-manifest.js";
 import { SpriteRenderer } from "./sprite-renderer.js";
 
-const phase = "phase-5";
+const phase = "phase-6";
 const DEFAULT_PET_MANIFEST = "./pets/development/pet.json";
 const SYSTEM_METRICS_EVENT = "system-metrics";
 const DEBUG_SIGNAL_KEY = "debug-state";
+const SINGLE_CLICK_SIGNAL_KEY = "single-click";
+const DOUBLE_CLICK_SIGNAL_KEY = "double-click";
+const INTERACTION_LATCH_TTL_MS = 10_000;
+const DRAG_THRESHOLD_PX = 4;
+const DOUBLE_CLICK_WINDOW_MS = 300;
 const DEBUG_TRIGGER_LABELS = Object.freeze({
   system_default: "Default",
   system_idle: "User Idle",
@@ -33,6 +38,9 @@ const DEBUG_TRIGGER_LABELS = Object.freeze({
   network_active: "Network",
   disk_network_active: "Disk+Network",
   random_behavior: "Random",
+  dragging: "Drag",
+  single_click: "Click",
+  double_click: "Double Click",
   debug_menu: "Debug",
 });
 
@@ -60,6 +68,7 @@ let animationFrameRequest = null;
 let unlistenSystemMetrics = null;
 let latestSystemMetrics = null;
 let dragSession = null;
+let pendingSingleClickTimer = null;
 let activeBehavior = null;
 let previousGateDiagnostics = null;
 let previousArbiterWinner = null;
@@ -274,7 +283,15 @@ function currentRandomBlocker() {
     return {
       priority: DECISION_PRIORITY.interaction,
       source: "dragging",
-      reason: "pet dragging",
+      reason: "pet pointer interaction",
+    };
+  }
+
+  if (pendingSingleClickTimer !== null) {
+    return {
+      priority: DECISION_PRIORITY.interaction,
+      source: "single_click",
+      reason: "waiting for double-click window",
     };
   }
 
@@ -558,12 +575,177 @@ async function subscribeSystemMetrics() {
   }
 }
 
+function clearPendingClickTimer() {
+  if (pendingSingleClickTimer === null) {
+    return;
+  }
+
+  clearTimeout(pendingSingleClickTimer);
+  pendingSingleClickTimer = null;
+}
+
+function clearLatchedPointerInteractions() {
+  behaviorArbiter.clearLatchedSignal(SINGLE_CLICK_SIGNAL_KEY);
+  behaviorArbiter.clearLatchedSignal(DOUBLE_CLICK_SIGNAL_KEY);
+}
+
+function makeInteractionDecision(state, source, reason) {
+  return {
+    state,
+    priority: DECISION_PRIORITY.interaction,
+    source,
+    reason,
+    requestedAt: runtimeClock.now(),
+  };
+}
+
+function applyImmediateBehavior(decision, context) {
+  if (!animationPlayer) {
+    return null;
+  }
+
+  const before = animationPlayer.getSnapshot();
+  const after = animationPlayer.interruptState(decision.state);
+  updateCurrentBehavior(decision.state, decision);
+  diagnosticLog("immediate_behavior_change", {
+    context,
+    interruptedState: before.currentState,
+    interruptedFrameIndex: before.currentFrameIndex,
+    interruptedActionCycleId: before.actionCycleId,
+    decision: compactDecision(decision),
+    nextActionCycleId: after.actionCycleId,
+  });
+  return after;
+}
+
+function requestPointerInteraction(state, source, reason, signalKey) {
+  if (!animationPlayer) {
+    return null;
+  }
+
+  clearLatchedPointerInteractions();
+  const decision = behaviorArbiter.latchSignal(
+    signalKey,
+    { state, priority: DECISION_PRIORITY.interaction, source, reason },
+    INTERACTION_LATCH_TTL_MS,
+  );
+  suppressPendingRandom(source);
+  const winner = submitArbiterDecision();
+  logArbiterWinnerChange(winner, source);
+  diagnosticLog("pointer_interaction_requested", {
+    interaction: source,
+    decision: compactDecision(decision),
+    arbiterWinner: compactDecision(winner),
+    pendingDecision: compactDecision(animationPlayer.getPendingDecision()),
+  });
+  return decision;
+}
+
+function queuePetClick() {
+  if (pendingSingleClickTimer !== null) {
+    clearPendingClickTimer();
+    requestPointerInteraction(
+      "jumping",
+      "double_click",
+      "pet double clicked",
+      DOUBLE_CLICK_SIGNAL_KEY,
+    );
+    return;
+  }
+
+  pendingSingleClickTimer = setTimeout(() => {
+    pendingSingleClickTimer = null;
+    requestPointerInteraction(
+      "waving",
+      "single_click",
+      "pet clicked",
+      SINGLE_CLICK_SIGNAL_KEY,
+    );
+  }, DOUBLE_CLICK_WINDOW_MS);
+}
+
 function dragInvoke(command, payload = {}) {
   const invoke = globalThis.__TAURI__?.core?.invoke;
   if (typeof invoke !== "function") {
     return Promise.reject(new Error("Tauri invoke is unavailable"));
   }
   return invoke(command, payload);
+}
+
+function setDragAnimation(session, state, context) {
+  if (!session.isDragging || session.dragState === state) {
+    return;
+  }
+
+  session.dragState = state;
+  const decision = makeInteractionDecision(state, "dragging", context);
+  applyImmediateBehavior(decision, context);
+  diagnosticLog("drag_direction_change", {
+    state,
+    context,
+    screenX: session.lastScreenX,
+    screenY: session.lastScreenY,
+  });
+}
+
+function trackPetDragMotion(session, screenX, screenY) {
+  const totalDx = screenX - session.startScreenX;
+  const totalDy = screenY - session.startScreenY;
+  const stepDx = screenX - session.lastScreenX;
+
+  if (!session.isDragging && Math.hypot(totalDx, totalDy) >= DRAG_THRESHOLD_PX) {
+    session.isDragging = true;
+    clearPendingClickTimer();
+    clearLatchedPointerInteractions();
+    const initialState = totalDx < 0 ? "running-left" : "running-right";
+    setDragAnimation(session, initialState, "drag_start");
+    diagnosticLog("drag_started", {
+      totalDx,
+      totalDy,
+      state: initialState,
+    });
+  } else if (session.isDragging && stepDx !== 0) {
+    setDragAnimation(
+      session,
+      stepDx < 0 ? "running-left" : "running-right",
+      "drag_direction",
+    );
+  }
+
+  session.lastScreenX = screenX;
+  session.lastScreenY = screenY;
+}
+
+function restoreBehaviorAfterDrag(session) {
+  behaviorArbiter.clearLatchedSignal(RANDOM_SIGNAL_KEY);
+  const nextRandomDueAt = randomBehavior.reschedule();
+  const winner =
+    behaviorArbiter.decide() ??
+    makeInteractionDecision("idle", "system_default", "drag released to default");
+  const consumedLatched = behaviorArbiter.consumeDecision(winner);
+
+  applyImmediateBehavior(winner, "drag_release");
+  const nextWinner = submitArbiterDecision();
+  logArbiterWinnerChange(nextWinner, "drag_release");
+  diagnosticLog("drag_finished", {
+    dragState: session.dragState,
+    restoredDecision: compactDecision(winner),
+    consumedLatched,
+    nextArbiterWinner: compactDecision(nextWinner),
+    nextRandomDueAt,
+  });
+}
+
+function finalizePetPointerSession(session) {
+  if (dragSession === session) {
+    dragSession = null;
+  }
+
+  if (session.isDragging) {
+    restoreBehaviorAfterDrag(session);
+  } else {
+    queuePetClick();
+  }
 }
 
 async function pumpDragUpdates(session) {
@@ -595,9 +777,7 @@ async function pumpDragUpdates(session) {
       console.warn("[screen-partner] window drag end failed", error);
     }
 
-    if (dragSession === session) {
-      dragSession = null;
-    }
+    finalizePetPointerSession(session);
     return;
   }
 
@@ -614,13 +794,19 @@ async function beginPetDrag(event) {
   event.preventDefault();
   const session = {
     pointerId: event.pointerId,
+    startScreenX: event.screenX,
+    startScreenY: event.screenY,
+    lastScreenX: event.screenX,
+    lastScreenY: event.screenY,
+    isDragging: false,
+    dragState: null,
     ready: false,
     pumping: false,
     pendingPoint: null,
     endRequested: false,
   };
   dragSession = session;
-  suppressPendingRandom("drag_start");
+  suppressPendingRandom("pointer_interaction_start");
 
   try {
     spriteElement.setPointerCapture(event.pointerId);
@@ -650,6 +836,7 @@ function updatePetDrag(event) {
   }
 
   event.preventDefault();
+  trackPetDragMotion(session, event.screenX, event.screenY);
   session.pendingPoint = {
     screenX: event.screenX,
     screenY: event.screenY,
@@ -664,6 +851,7 @@ function endPetDrag(event) {
   }
 
   event.preventDefault();
+  trackPetDragMotion(session, event.screenX, event.screenY);
   session.pendingPoint = {
     screenX: event.screenX,
     screenY: event.screenY,
@@ -679,7 +867,7 @@ function endPetDrag(event) {
   pumpDragUpdates(session);
 }
 
-function installPetDragging() {
+function installPetInteractions() {
   spriteElement.addEventListener("pointerdown", beginPetDrag);
   spriteElement.addEventListener("pointermove", updatePetDrag);
   spriteElement.addEventListener("pointerup", endPetDrag);
@@ -737,7 +925,7 @@ async function initialize() {
     });
     randomBehavior.start();
     showPet();
-    installPetDragging();
+    installPetInteractions();
 
     const devUiEnabled = await developmentUiEnabled();
     if (devUiEnabled) {
@@ -759,6 +947,8 @@ async function initialize() {
       });
 
       if (document.visibilityState === "hidden") {
+        clearPendingClickTimer();
+        clearLatchedPointerInteractions();
         const randomCleared = behaviorArbiter.clearLatchedSignal(RANDOM_SIGNAL_KEY);
         randomBehavior.reset();
         if (randomCleared) {
@@ -795,6 +985,8 @@ window.addEventListener("beforeunload", () => {
     randomBehavior: randomBehavior.getDiagnostics(),
   });
   void flushDiagnosticLog();
+
+  clearPendingClickTimer();
 
   if (diagnosticFlushTimer !== null) {
     clearTimeout(diagnosticFlushTimer);
