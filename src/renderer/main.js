@@ -22,6 +22,7 @@ const phase = "phase-6";
 const DEFAULT_PET_MANIFEST = "./pets/development/pet.json";
 const SYSTEM_METRICS_EVENT = "system-metrics";
 const DEBUG_SIGNAL_KEY = "debug-state";
+const DRAG_SIGNAL_KEY = "dragging";
 const SINGLE_CLICK_SIGNAL_KEY = "single-click";
 const DOUBLE_CLICK_SIGNAL_KEY = "double-click";
 const INTERACTION_LATCH_TTL_MS = 10_000;
@@ -253,6 +254,11 @@ function updateCurrentBehavior(state, appliedDecision = null) {
 function submitArbiterDecision() {
   if (!animationPlayer) {
     return null;
+  }
+
+  if (dragSession?.isDragging && dragSession.dragDecision) {
+    animationPlayer.requestDecision(dragSession.dragDecision);
+    return dragSession.dragDecision;
   }
 
   const decision = behaviorArbiter.decide();
@@ -599,6 +605,16 @@ function makeInteractionDecision(state, source, reason) {
   };
 }
 
+function makeDefaultDecision(reason) {
+  return {
+    state: "idle",
+    priority: DECISION_PRIORITY.idle,
+    source: "system_default",
+    reason,
+    requestedAt: runtimeClock.now(),
+  };
+}
+
 function applyImmediateBehavior(decision, context) {
   if (!animationPlayer) {
     return null;
@@ -678,8 +694,13 @@ function setDragAnimation(session, state, context) {
   }
 
   session.dragState = state;
-  const decision = makeInteractionDecision(state, "dragging", context);
-  applyImmediateBehavior(decision, context);
+  session.dragDecision = behaviorArbiter.setContinuousSignal(DRAG_SIGNAL_KEY, {
+    state,
+    priority: DECISION_PRIORITY.interaction,
+    source: "dragging",
+    reason: context,
+  });
+  applyImmediateBehavior(session.dragDecision, context);
   diagnosticLog("drag_direction_change", {
     state,
     context,
@@ -717,11 +738,10 @@ function trackPetDragMotion(session, screenX, screenY) {
 }
 
 function restoreBehaviorAfterDrag(session) {
+  behaviorArbiter.clearContinuousSignal(DRAG_SIGNAL_KEY);
   behaviorArbiter.clearLatchedSignal(RANDOM_SIGNAL_KEY);
   const nextRandomDueAt = randomBehavior.reschedule();
-  const winner =
-    behaviorArbiter.decide() ??
-    makeInteractionDecision("idle", "system_default", "drag released to default");
+  const winner = behaviorArbiter.decide() ?? makeDefaultDecision("drag released");
   const consumedLatched = behaviorArbiter.consumeDecision(winner);
 
   applyImmediateBehavior(winner, "drag_release");
@@ -736,6 +756,18 @@ function restoreBehaviorAfterDrag(session) {
   });
 }
 
+function finalizeCancelledPointerSession() {
+  behaviorArbiter.clearContinuousSignal(DRAG_SIGNAL_KEY);
+  behaviorArbiter.clearLatchedSignal(RANDOM_SIGNAL_KEY);
+  const nextRandomDueAt = randomBehavior.reschedule();
+  const winner = submitArbiterDecision();
+  logArbiterWinnerChange(winner, "pointer_cancel");
+  diagnosticLog("pointer_interaction_cancelled", {
+    arbiterWinner: compactDecision(winner),
+    nextRandomDueAt,
+  });
+}
+
 function finalizePetPointerSession(session) {
   if (dragSession === session) {
     dragSession = null;
@@ -743,6 +775,8 @@ function finalizePetPointerSession(session) {
 
   if (session.isDragging) {
     restoreBehaviorAfterDrag(session);
+  } else if (session.cancelled) {
+    finalizeCancelledPointerSession();
   } else {
     queuePetClick();
   }
@@ -800,6 +834,8 @@ async function beginPetDrag(event) {
     lastScreenY: event.screenY,
     isDragging: false,
     dragState: null,
+    dragDecision: null,
+    cancelled: false,
     ready: false,
     pumping: false,
     pendingPoint: null,
@@ -823,6 +859,7 @@ async function beginPetDrag(event) {
     await pumpDragUpdates(session);
   } catch (error) {
     console.warn("[screen-partner] window drag start failed", error);
+    session.cancelled = true;
     session.endRequested = true;
     session.ready = true;
     await pumpDragUpdates(session);
@@ -851,6 +888,7 @@ function endPetDrag(event) {
   }
 
   event.preventDefault();
+  session.cancelled = event.type === "pointercancel";
   trackPetDragMotion(session, event.screenX, event.screenY);
   session.pendingPoint = {
     screenX: event.screenX,
@@ -949,6 +987,7 @@ async function initialize() {
       if (document.visibilityState === "hidden") {
         clearPendingClickTimer();
         clearLatchedPointerInteractions();
+        behaviorArbiter.clearContinuousSignal(DRAG_SIGNAL_KEY);
         const randomCleared = behaviorArbiter.clearLatchedSignal(RANDOM_SIGNAL_KEY);
         randomBehavior.reset();
         if (randomCleared) {
@@ -987,6 +1026,7 @@ window.addEventListener("beforeunload", () => {
   void flushDiagnosticLog();
 
   clearPendingClickTimer();
+  behaviorArbiter.clearContinuousSignal(DRAG_SIGNAL_KEY);
 
   if (diagnosticFlushTimer !== null) {
     clearTimeout(diagnosticFlushTimer);
@@ -1002,6 +1042,7 @@ window.addEventListener("beforeunload", () => {
   }
 
   if (dragSession) {
+    dragSession.cancelled = true;
     dragSession.endRequested = true;
     pumpDragUpdates(dragSession);
   }
