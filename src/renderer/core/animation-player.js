@@ -116,6 +116,29 @@ export class AnimationPlayer {
     return this.#pendingDecision;
   }
 
+  interruptState(state) {
+    if (!this.#running) {
+      throw new Error("start() must be called before interruptState()");
+    }
+
+    const animation = this.#getAnimation(state);
+    const now = this.#clock.now();
+
+    this.#currentState = state;
+    this.#pendingDecision = null;
+    this.#currentFrameIndex = 0;
+    this.#frameStartedAt = now;
+    this.#frameDeadline = now + animation.frames[0].durationMs;
+    this.#lastTickAt = now;
+    this.#actionCycleId += 1;
+    this.#suspendedRemainingMs = this.#suspended
+      ? animation.frames[0].durationMs
+      : 0;
+    this.#emitFrame();
+
+    return this.getSnapshot();
+  }
+
   tick() {
     if (!this.#running || this.#suspended) {
       return this.getSnapshot();
