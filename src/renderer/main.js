@@ -6,6 +6,11 @@ import {
 import { SystemClock } from "./core/clock.js";
 import { PET_STATES } from "./core/normalized-pet.js";
 import {
+  DEFAULT_RANDOM_BEHAVIOR_RULES,
+  RandomBehavior,
+  RANDOM_SIGNAL_KEY,
+} from "./core/random-behavior.js";
+import {
   DEFAULT_SYSTEM_BEHAVIOR_RULES,
   SignalMapper,
   SYSTEM_SIGNAL_KEYS,
@@ -13,7 +18,7 @@ import {
 import { loadCodexV1Pet } from "./codex-v1-manifest.js";
 import { SpriteRenderer } from "./sprite-renderer.js";
 
-const phase = "phase-4";
+const phase = "phase-5";
 const DEFAULT_PET_MANIFEST = "./pets/development/pet.json";
 const SYSTEM_METRICS_EVENT = "system-metrics";
 const DEBUG_SIGNAL_KEY = "debug-state";
@@ -27,6 +32,7 @@ const DEBUG_TRIGGER_LABELS = Object.freeze({
   disk_active: "Disk",
   network_active: "Network",
   disk_network_active: "Disk+Network",
+  random_behavior: "Random",
   debug_menu: "Debug",
 });
 
@@ -48,6 +54,7 @@ const renderer = new SpriteRenderer(spriteElement);
 const runtimeClock = new SystemClock();
 const behaviorArbiter = new BehaviorArbiter({ clock: runtimeClock });
 const signalMapper = new SignalMapper({ clock: runtimeClock });
+const randomBehavior = new RandomBehavior({ clock: runtimeClock });
 let animationPlayer = null;
 let animationFrameRequest = null;
 let unlistenSystemMetrics = null;
@@ -153,6 +160,7 @@ async function startDiagnosticLogging() {
       phase,
       logPath: diagnosticLogPath,
       rules: DEFAULT_SYSTEM_BEHAVIOR_RULES,
+      randomRules: DEFAULT_RANDOM_BEHAVIOR_RULES,
       currentBehavior: activeBehavior,
       userAgent: navigator.userAgent,
     });
@@ -184,12 +192,15 @@ function updateCurrentBehavior(state, appliedDecision = null) {
   const now = runtimeClock.now();
   const source = appliedDecision?.source ?? activeBehavior?.source ?? "system_default";
   const reason = appliedDecision?.reason ?? activeBehavior?.reason ?? "initial state";
+  const priority =
+    appliedDecision?.priority ?? activeBehavior?.priority ?? DECISION_PRIORITY.idle;
   const behaviorChanged =
     !activeBehavior || activeBehavior.state !== state || activeBehavior.source !== source;
 
   if (behaviorChanged && activeBehavior) {
     diagnosticLog("behavior_exit", {
       state: activeBehavior.state,
+      priority: activeBehavior.priority,
       source: activeBehavior.source,
       trigger: triggerLabel(activeBehavior.source),
       reason: activeBehavior.reason,
@@ -203,6 +214,7 @@ function updateCurrentBehavior(state, appliedDecision = null) {
   if (behaviorChanged) {
     activeBehavior = {
       state,
+      priority,
       source,
       reason,
       startedAtRuntimeMs: now,
@@ -210,6 +222,7 @@ function updateCurrentBehavior(state, appliedDecision = null) {
     };
     diagnosticLog("behavior_enter", {
       state,
+      priority,
       source,
       trigger: triggerLabel(source),
       reason,
@@ -226,13 +239,6 @@ function updateCurrentBehavior(state, appliedDecision = null) {
     debugCurrentTriggerElement.textContent = trigger;
   }
   document.documentElement.dataset.petTrigger = trigger;
-}
-
-function scheduleAnimationTick() {
-  animationFrameRequest = requestAnimationFrame(() => {
-    animationPlayer?.tick();
-    scheduleAnimationTick();
-  });
 }
 
 function submitArbiterDecision() {
@@ -263,6 +269,95 @@ function logArbiterWinnerChange(decision, context) {
   previousArbiterWinner = decision;
 }
 
+function currentRandomBlocker() {
+  if (dragSession) {
+    return {
+      priority: DECISION_PRIORITY.interaction,
+      source: "dragging",
+      reason: "pet dragging",
+    };
+  }
+
+  const arbiterWinner = behaviorArbiter.decide();
+  if (arbiterWinner?.priority < DECISION_PRIORITY.random) {
+    return arbiterWinner;
+  }
+
+  if (activeBehavior?.priority < DECISION_PRIORITY.random) {
+    return activeBehavior;
+  }
+
+  return null;
+}
+
+function suppressPendingRandom(context) {
+  const blocker = currentRandomBlocker();
+  if (!blocker) {
+    return false;
+  }
+
+  const cleared = behaviorArbiter.clearLatchedSignal(RANDOM_SIGNAL_KEY);
+  if (!cleared) {
+    return false;
+  }
+
+  const nextDueAt = randomBehavior.reschedule();
+  const winner = submitArbiterDecision();
+  logArbiterWinnerChange(winner, `${context}_random_suppressed`);
+  diagnosticLog("random_behavior_suppressed", {
+    context,
+    blocker: compactDecision(blocker),
+    nextDueAt,
+    arbiterWinner: compactDecision(winner),
+    pendingDecision: compactDecision(animationPlayer?.getPendingDecision()),
+  });
+  return true;
+}
+
+function pollRandomBehavior() {
+  if (!animationPlayer) {
+    return;
+  }
+
+  const blocker = currentRandomBlocker();
+  const event = randomBehavior.poll({ blocked: Boolean(blocker) });
+  if (!event) {
+    return;
+  }
+
+  if (event.type === "decision") {
+    const decision = behaviorArbiter.latchSignal(
+      RANDOM_SIGNAL_KEY,
+      event.decision,
+      event.latchTtlMs,
+    );
+    const winner = submitArbiterDecision();
+    logArbiterWinnerChange(winner, "random_behavior");
+    diagnosticLog("random_behavior_requested", {
+      scheduledFor: event.scheduledFor,
+      nextDueAt: event.nextDueAt,
+      decision: compactDecision(decision),
+      arbiterWinner: compactDecision(winner),
+      pendingDecision: compactDecision(animationPlayer.getPendingDecision()),
+    });
+    return;
+  }
+
+  diagnosticLog(`random_behavior_${event.type}`, {
+    scheduledFor: event.scheduledFor,
+    nextDueAt: event.nextDueAt,
+    blocker: compactDecision(blocker),
+  });
+}
+
+function scheduleAnimationTick() {
+  animationFrameRequest = requestAnimationFrame(() => {
+    pollRandomBehavior();
+    animationPlayer?.tick();
+    scheduleAnimationTick();
+  });
+}
+
 function requestDebugState(state) {
   if (!animationPlayer) {
     return;
@@ -277,6 +372,7 @@ function requestDebugState(state) {
       source: "debug_menu",
       reason: "manual_state",
     });
+    suppressPendingRandom("debug_mode_change");
   }
 
   const winner = submitArbiterDecision();
@@ -420,6 +516,7 @@ function handleSystemMetrics(metrics) {
   try {
     const mappedSignals = signalMapper.update(metrics);
     applySystemSignals(mappedSignals);
+    suppressPendingRandom("telemetry_sample");
     const winner = submitArbiterDecision();
     const diagnostics = signalMapper.getDiagnostics();
     logGateChanges(diagnostics);
@@ -436,6 +533,7 @@ function handleSystemMetrics(metrics) {
       currentState: playerSnapshot?.currentState ?? null,
       activeBehavior,
       pendingDecision: compactDecision(animationPlayer?.getPendingDecision()),
+      randomBehavior: randomBehavior.getDiagnostics(),
     });
   } catch (error) {
     diagnosticLog("signal_mapping_error", { message: String(error) });
@@ -522,6 +620,7 @@ async function beginPetDrag(event) {
     endRequested: false,
   };
   dragSession = session;
+  suppressPendingRandom("drag_start");
 
   try {
     spriteElement.setPointerCapture(event.pointerId);
@@ -632,9 +731,11 @@ async function initialize() {
     animationPlayer.loadPet(pet);
     animationPlayer.start("idle");
     updateCurrentBehavior("idle", {
+      priority: DECISION_PRIORITY.idle,
       source: "system_default",
       reason: "initial state",
     });
+    randomBehavior.start();
     showPet();
     installPetDragging();
 
@@ -658,9 +759,16 @@ async function initialize() {
       });
 
       if (document.visibilityState === "hidden") {
+        const randomCleared = behaviorArbiter.clearLatchedSignal(RANDOM_SIGNAL_KEY);
+        randomBehavior.reset();
+        if (randomCleared) {
+          const winner = submitArbiterDecision();
+          logArbiterWinnerChange(winner, "visibility_hidden_random_cleared");
+        }
         animationPlayer?.suspend();
         void flushDiagnosticLog();
       } else {
+        randomBehavior.start();
         animationPlayer?.resume();
       }
     });
@@ -669,6 +777,7 @@ async function initialize() {
     diagnosticLog("renderer_ready", {
       petId: pet.id,
       stateCount: PET_STATES.length,
+      randomBehavior: randomBehavior.getDiagnostics(),
     });
     console.info(
       `[screen-partner] renderer ready: ${phase}; pet=${pet.id}; states=${PET_STATES.length}`,
@@ -683,6 +792,7 @@ window.addEventListener("beforeunload", () => {
     currentBehavior: activeBehavior,
     currentState: animationPlayer?.getSnapshot().currentState ?? null,
     pendingDecision: compactDecision(animationPlayer?.getPendingDecision()),
+    randomBehavior: randomBehavior.getDiagnostics(),
   });
   void flushDiagnosticLog();
 
