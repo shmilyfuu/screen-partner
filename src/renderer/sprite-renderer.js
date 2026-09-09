@@ -25,6 +25,10 @@ export function getSpriteFrameGeometry(pet, spriteIndex) {
   });
 }
 
+function scaledPixels(value, scale) {
+  return value * scale;
+}
+
 function backgroundOffset(value) {
   return value === 0 ? "0px" : `-${value}px`;
 }
@@ -32,6 +36,7 @@ function backgroundOffset(value) {
 export class SpriteRenderer {
   #element;
   #pet = null;
+  #scale = 1;
 
   constructor(element) {
     if (!element?.style) {
@@ -41,6 +46,22 @@ export class SpriteRenderer {
     this.#element = element;
   }
 
+  setScale(scale) {
+    if (!Number.isFinite(scale) || scale <= 0) {
+      throw new TypeError("scale must be a positive finite number");
+    }
+
+    this.#scale = scale;
+    this.#applyPetGeometry();
+
+    const spriteIndex = Number(this.#element.dataset.spriteIndex);
+    if (this.#pet && Number.isInteger(spriteIndex)) {
+      this.#applyFrameGeometry(spriteIndex);
+    }
+
+    return this.#scale;
+  }
+
   loadPet(pet, spritesheetUrl) {
     this.#pet = validateNormalizedPet(pet);
 
@@ -48,15 +69,10 @@ export class SpriteRenderer {
       throw new TypeError("spritesheetUrl must be a non-empty string");
     }
 
-    const sheetWidth = pet.frameWidth * pet.columns;
-    const sheetHeight = pet.frameHeight * pet.rows;
-
-    this.#element.style.width = `${pet.frameWidth}px`;
-    this.#element.style.height = `${pet.frameHeight}px`;
     this.#element.style.backgroundImage = `url("${spritesheetUrl}")`;
-    this.#element.style.backgroundSize = `${sheetWidth}px ${sheetHeight}px`;
     this.#element.style.backgroundRepeat = "no-repeat";
     this.#element.dataset.petId = pet.id;
+    this.#applyPetGeometry();
   }
 
   renderFrame(frameEvent) {
@@ -65,10 +81,7 @@ export class SpriteRenderer {
     }
 
     const spriteIndex = frameEvent?.frame?.spriteIndex ?? frameEvent?.spriteIndex;
-    const geometry = getSpriteFrameGeometry(this.#pet, spriteIndex);
-
-    this.#element.style.backgroundPosition =
-      `${backgroundOffset(geometry.x)} ${backgroundOffset(geometry.y)}`;
+    this.#applyFrameGeometry(spriteIndex);
     this.#element.dataset.spriteIndex = String(spriteIndex);
     this.#element.dataset.state = frameEvent?.state ?? "";
   }
@@ -81,5 +94,26 @@ export class SpriteRenderer {
     delete this.#element.dataset.petId;
     delete this.#element.dataset.spriteIndex;
     delete this.#element.dataset.state;
+  }
+
+  #applyPetGeometry() {
+    if (!this.#pet) {
+      return;
+    }
+
+    const sheetWidth = this.#pet.frameWidth * this.#pet.columns;
+    const sheetHeight = this.#pet.frameHeight * this.#pet.rows;
+    this.#element.style.width = `${scaledPixels(this.#pet.frameWidth, this.#scale)}px`;
+    this.#element.style.height = `${scaledPixels(this.#pet.frameHeight, this.#scale)}px`;
+    this.#element.style.backgroundSize =
+      `${scaledPixels(sheetWidth, this.#scale)}px ${scaledPixels(sheetHeight, this.#scale)}px`;
+  }
+
+  #applyFrameGeometry(spriteIndex) {
+    const geometry = getSpriteFrameGeometry(this.#pet, spriteIndex);
+    const x = scaledPixels(geometry.x, this.#scale);
+    const y = scaledPixels(geometry.y, this.#scale);
+    this.#element.style.backgroundPosition =
+      `${backgroundOffset(x)} ${backgroundOffset(y)}`;
   }
 }

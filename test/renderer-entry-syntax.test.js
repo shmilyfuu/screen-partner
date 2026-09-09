@@ -3,14 +3,16 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-const rendererEntry = fileURLToPath(
-  new URL("../src/renderer/main.js", import.meta.url),
+const entries = ["main.js", "settings.js"].map((fileName) =>
+  fileURLToPath(new URL(`../src/renderer/${fileName}`, import.meta.url)),
 );
 
-test("renderer entry parses as valid JavaScript", () => {
-  assert.doesNotThrow(() => {
-    execFileSync(process.execPath, ["--check", rendererEntry], {
-      stdio: "pipe",
+for (const entry of entries) {
+  test(`${entry} parses as valid JavaScript`, () => {
+    assert.doesNotThrow(() => {
+      execFileSync(process.execPath, ["--check", entry], {
+        stdio: "pipe",
+      });
     });
   });
-});
+}

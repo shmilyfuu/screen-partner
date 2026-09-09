@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Screen Partner 设置</title>
+    <link rel="stylesheet" href="./settings.css" />
+  </head>
+  <body>
+    <main class="settings-shell">
+      <header class="settings-header">
+        <div>
+          <h1>Screen Partner</h1>
+          <p>桌面宠物设置</p>
+        </div>
+        <span class="phase-badge">Phase 6</span>
+      </header>
+
+      <form class="settings-form" data-settings-form>
+        <section class="settings-section" aria-labelledby="appearance-heading">
+          <div class="section-heading">
+            <h2 id="appearance-heading">外观与窗口</h2>
+            <p>调整宠物尺寸和窗口层级。</p>
+          </div>
+
+          <label class="setting-row">
+            <span class="setting-copy">
+              <strong>宠物大小</strong>
+              <small>调整宠物与透明窗口的整体尺寸。</small>
+            </span>
+            <select data-setting-pet-scale aria-label="宠物大小">
+              <option value="0.75">75%</option>
+              <option value="1">100%</option>
+              <option value="1.25">125%</option>
+              <option value="1.5">150%</option>
+            </select>
+          </label>
+
+          <label class="setting-row">
+            <span class="setting-copy">
+              <strong>始终置顶</strong>
+              <small>让宠物窗口保持在普通窗口之上。</small>
+            </span>
+            <input type="checkbox" data-setting-always-on-top />
+          </label>
+        </section>
+
+        <section class="settings-section" aria-labelledby="behavior-heading">
+          <div class="section-heading">
+            <h2 id="behavior-heading">行为</h2>
+            <p>控制自动行为与系统感知。</p>
+          </div>
+
+          <label class="setting-row">
+            <span class="setting-copy">
+              <strong>随机动作</strong>
+              <small>允许宠物按既定时间和权重触发自主动作。</small>
+            </span>
+            <input type="checkbox" data-setting-random-behavior />
+          </label>
+
+          <label class="setting-row">
+            <span class="setting-copy">
+              <strong>系统感知</strong>
+              <small>根据 CPU、GPU、内存、磁盘、网络和系统反馈切换状态。</small>
+            </span>
+            <input type="checkbox" data-setting-system-awareness />
+          </label>
+        </section>
+
+        <section class="settings-section" aria-labelledby="startup-heading">
+          <div class="section-heading">
+            <h2 id="startup-heading">启动</h2>
+            <p>控制系统登录后的启动行为。</p>
+          </div>
+
+          <label class="setting-row">
+            <span class="setting-copy">
+              <strong>开机启动</strong>
+              <small>登录 Windows 或 macOS 后自动启动 Screen Partner。</small>
+            </span>
+            <input type="checkbox" data-setting-launch-at-startup />
+          </label>
+        </section>
+      </form>
+
+      <section class="settings-section" aria-labelledby="window-actions-heading">
+        <div class="section-heading">
+          <h2 id="window-actions-heading">宠物窗口</h2>
+          <p>直接控制当前宠物窗口。</p>
+        </div>
+        <div class="button-grid">
+          <button type="button" data-action-show>显示宠物</button>
+          <button type="button" data-action-hide>隐藏宠物</button>
+          <button type="button" data-action-recall>召回主屏幕</button>
+        </div>
+      </section>
+
+      <footer class="settings-footer">
+        <output data-settings-status aria-live="polite"></output>
+        <button type="button" class="secondary" data-action-reset>
+          恢复默认桌面设置
+        </button>
+      </footer>
+    </main>
+
+    <script type="module" src="./settings.js"></script>
+  </body>
+</html>
