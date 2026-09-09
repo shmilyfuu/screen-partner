@@ -175,6 +175,55 @@ test("pending decisions switch state only after the last frame duration", () => 
   assert.equal(boundaries[0].appliedDecision.source, "single_click");
 });
 
+test("immediate interruption discards the current cycle and pending decision", () => {
+  const clock = new FakeClock();
+  const frames = [];
+  const boundaries = [];
+  const player = new AnimationPlayer({
+    clock,
+    longPauseThresholdMs: 10_000,
+    onFrame: (frame) => frames.push(frame),
+    onActionBoundary: (boundary) => boundaries.push(boundary),
+  });
+
+  player.loadPet(
+    createTestPet({
+      idle: [100, 100],
+      waving: [50],
+      "running-right": [20, 20],
+      "running-left": [30, 30],
+    }),
+  );
+  player.start("idle");
+
+  clock.advance(40);
+  player.requestDecision({
+    state: "waving",
+    priority: DECISION_PRIORITY.interaction,
+    source: "single_click",
+    reason: "pet clicked",
+    requestedAt: clock.now(),
+  });
+
+  const rightSnapshot = player.interruptState("running-right");
+  assert.equal(rightSnapshot.currentState, "running-right");
+  assert.equal(rightSnapshot.currentFrameIndex, 0);
+  assert.equal(rightSnapshot.pendingDecision, null);
+  assert.equal(rightSnapshot.actionCycleId, 2);
+  assert.equal(rightSnapshot.frameDeadline, 60);
+  assert.equal(boundaries.length, 0);
+  assert.equal(frames.at(-1).state, "running-right");
+
+  clock.advance(5);
+  const leftSnapshot = player.interruptState("running-left");
+  assert.equal(leftSnapshot.currentState, "running-left");
+  assert.equal(leftSnapshot.currentFrameIndex, 0);
+  assert.equal(leftSnapshot.actionCycleId, 3);
+  assert.equal(leftSnapshot.frameDeadline, 75);
+  assert.equal(boundaries.length, 0);
+  assert.equal(frames.at(-1).state, "running-left");
+});
+
 test("AnimationPlayer keeps only the latest arbiter result in the pending slot", () => {
   const clock = new FakeClock();
   const player = new AnimationPlayer({ clock, longPauseThresholdMs: 10_000 });

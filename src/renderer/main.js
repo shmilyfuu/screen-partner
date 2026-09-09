@@ -15,13 +15,18 @@ import {
   SignalMapper,
   SYSTEM_SIGNAL_KEYS,
 } from "./core/signal-mapper.js";
+import { normalizeSettings } from "./core/settings-model.js";
 import { loadCodexV1Pet } from "./codex-v1-manifest.js";
 import { SpriteRenderer } from "./sprite-renderer.js";
 
-const phase = "phase-5";
+const phase = "phase-6";
 const DEFAULT_PET_MANIFEST = "./pets/development/pet.json";
 const SYSTEM_METRICS_EVENT = "system-metrics";
+const SETTINGS_CHANGED_EVENT = "settings-changed";
 const DEBUG_SIGNAL_KEY = "debug-state";
+const DRAG_SIGNAL_KEY = "dragging";
+const DRAG_THRESHOLD_PX = 4;
+const DOUBLE_CLICK_WINDOW_MS = 300;
 const DEBUG_TRIGGER_LABELS = Object.freeze({
   system_default: "Default",
   system_idle: "User Idle",
@@ -33,6 +38,9 @@ const DEBUG_TRIGGER_LABELS = Object.freeze({
   network_active: "Network",
   disk_network_active: "Disk+Network",
   random_behavior: "Random",
+  dragging: "Drag",
+  single_click: "Click",
+  double_click: "Double Click",
   debug_menu: "Debug",
 });
 
@@ -40,6 +48,7 @@ document.documentElement.dataset.screenPartnerPhase = phase;
 
 document.addEventListener("contextmenu", (event) => {
   event.preventDefault();
+  void openSettingsWindow();
 });
 
 const spriteElement = document.querySelector("[data-pet-sprite]");
@@ -53,13 +62,16 @@ const debugStateSelect = document.querySelector("[data-debug-state]");
 const renderer = new SpriteRenderer(spriteElement);
 const runtimeClock = new SystemClock();
 const behaviorArbiter = new BehaviorArbiter({ clock: runtimeClock });
-const signalMapper = new SignalMapper({ clock: runtimeClock });
+let signalMapper = new SignalMapper({ clock: runtimeClock });
 const randomBehavior = new RandomBehavior({ clock: runtimeClock });
+let appSettings = normalizeSettings(null);
 let animationPlayer = null;
 let animationFrameRequest = null;
 let unlistenSystemMetrics = null;
+let unlistenSettings = null;
 let latestSystemMetrics = null;
 let dragSession = null;
+let pendingSingleClickTimer = null;
 let activeBehavior = null;
 let previousGateDiagnostics = null;
 let previousArbiterWinner = null;
@@ -161,6 +173,7 @@ async function startDiagnosticLogging() {
       logPath: diagnosticLogPath,
       rules: DEFAULT_SYSTEM_BEHAVIOR_RULES,
       randomRules: DEFAULT_RANDOM_BEHAVIOR_RULES,
+      settings: appSettings,
       currentBehavior: activeBehavior,
       userAgent: navigator.userAgent,
     });
@@ -246,6 +259,11 @@ function submitArbiterDecision() {
     return null;
   }
 
+  if (dragSession?.isDragging && dragSession.dragDecision) {
+    animationPlayer.requestDecision(dragSession.dragDecision);
+    return dragSession.dragDecision;
+  }
+
   const decision = behaviorArbiter.decide();
   if (decision) {
     animationPlayer.requestDecision(decision);
@@ -274,7 +292,15 @@ function currentRandomBlocker() {
     return {
       priority: DECISION_PRIORITY.interaction,
       source: "dragging",
-      reason: "pet dragging",
+      reason: "pet pointer interaction",
+    };
+  }
+
+  if (pendingSingleClickTimer !== null) {
+    return {
+      priority: DECISION_PRIORITY.interaction,
+      source: "single_click",
+      reason: "waiting for double-click window",
     };
   }
 
@@ -290,6 +316,14 @@ function currentRandomBlocker() {
   return null;
 }
 
+function rescheduleRandomBehavior() {
+  if (!appSettings.desktop.randomBehaviorEnabled) {
+    randomBehavior.reset();
+    return null;
+  }
+  return randomBehavior.reschedule();
+}
+
 function suppressPendingRandom(context) {
   const blocker = currentRandomBlocker();
   if (!blocker) {
@@ -301,7 +335,7 @@ function suppressPendingRandom(context) {
     return false;
   }
 
-  const nextDueAt = randomBehavior.reschedule();
+  const nextDueAt = rescheduleRandomBehavior();
   const winner = submitArbiterDecision();
   logArbiterWinnerChange(winner, `${context}_random_suppressed`);
   diagnosticLog("random_behavior_suppressed", {
@@ -315,7 +349,7 @@ function suppressPendingRandom(context) {
 }
 
 function pollRandomBehavior() {
-  if (!animationPlayer) {
+  if (!animationPlayer || !appSettings.desktop.randomBehaviorEnabled) {
     return;
   }
 
@@ -439,6 +473,28 @@ function applySystemSignals(snapshot) {
   }
 }
 
+function makeDefaultDecision(reason) {
+  return {
+    state: "idle",
+    priority: DECISION_PRIORITY.idle,
+    source: "system_default",
+    reason,
+    requestedAt: runtimeClock.now(),
+  };
+}
+
+function resetSystemSignals(reason) {
+  for (const key of Object.values(SYSTEM_SIGNAL_KEYS)) {
+    behaviorArbiter.clearContinuousSignal(key);
+  }
+  behaviorArbiter.setContinuousSignal(
+    SYSTEM_SIGNAL_KEYS.fallback,
+    makeDefaultDecision(reason),
+  );
+  signalMapper = new SignalMapper({ clock: runtimeClock });
+  previousGateDiagnostics = null;
+}
+
 function logGateChanges(diagnostics) {
   if (!diagnostics) {
     return;
@@ -513,6 +569,16 @@ function handleSystemMetrics(metrics) {
   document.documentElement.dataset.telemetryReady = "true";
   updateDebugMetrics(metrics);
 
+  if (!appSettings.desktop.systemAwarenessEnabled) {
+    diagnosticLog("telemetry_sample", {
+      telemetryTimestampMs: metrics.timestampMs ?? null,
+      systemAwarenessEnabled: false,
+      currentState: animationPlayer?.getSnapshot().currentState ?? null,
+      activeBehavior,
+    });
+    return;
+  }
+
   try {
     const mappedSignals = signalMapper.update(metrics);
     applySystemSignals(mappedSignals);
@@ -534,6 +600,7 @@ function handleSystemMetrics(metrics) {
       activeBehavior,
       pendingDecision: compactDecision(animationPlayer?.getPendingDecision()),
       randomBehavior: randomBehavior.getDiagnostics(),
+      systemAwarenessEnabled: true,
     });
   } catch (error) {
     diagnosticLog("signal_mapping_error", { message: String(error) });
@@ -558,12 +625,187 @@ async function subscribeSystemMetrics() {
   }
 }
 
+function clearPendingClickTimer() {
+  if (pendingSingleClickTimer === null) {
+    return;
+  }
+
+  clearTimeout(pendingSingleClickTimer);
+  pendingSingleClickTimer = null;
+}
+
+function makeInteractionDecision(state, source, reason) {
+  return {
+    state,
+    priority: DECISION_PRIORITY.interaction,
+    source,
+    reason,
+    requestedAt: runtimeClock.now(),
+  };
+}
+
+function applyImmediateBehavior(decision, context) {
+  if (!animationPlayer) {
+    return null;
+  }
+
+  const before = animationPlayer.getSnapshot();
+  const after = animationPlayer.interruptState(decision.state);
+  updateCurrentBehavior(decision.state, decision);
+  diagnosticLog("immediate_behavior_change", {
+    context,
+    interruptedState: before.currentState,
+    interruptedFrameIndex: before.currentFrameIndex,
+    interruptedActionCycleId: before.actionCycleId,
+    decision: compactDecision(decision),
+    nextActionCycleId: after.actionCycleId,
+  });
+  return after;
+}
+
+function requestPointerInteraction(state, source, reason) {
+  if (!animationPlayer) {
+    return null;
+  }
+
+  const decision = makeInteractionDecision(state, source, reason);
+  const randomCleared = behaviorArbiter.clearLatchedSignal(RANDOM_SIGNAL_KEY);
+  const nextRandomDueAt = rescheduleRandomBehavior();
+  applyImmediateBehavior(decision, source);
+
+  const restoreDecision = behaviorArbiter.decide() ?? makeDefaultDecision(`${source} completed`);
+  animationPlayer.requestDecision(restoreDecision);
+  logArbiterWinnerChange(restoreDecision, `${source}_restore_target`);
+  diagnosticLog("pointer_interaction_started", {
+    interaction: source,
+    decision: compactDecision(decision),
+    restoreDecision: compactDecision(restoreDecision),
+    randomCleared,
+    nextRandomDueAt,
+  });
+  return decision;
+}
+
+function queuePetClick() {
+  if (pendingSingleClickTimer !== null) {
+    clearPendingClickTimer();
+    requestPointerInteraction(
+      "jumping",
+      "double_click",
+      "pet double clicked",
+    );
+    return;
+  }
+
+  pendingSingleClickTimer = setTimeout(() => {
+    pendingSingleClickTimer = null;
+    requestPointerInteraction(
+      "waving",
+      "single_click",
+      "pet clicked",
+    );
+  }, DOUBLE_CLICK_WINDOW_MS);
+}
+
 function dragInvoke(command, payload = {}) {
   const invoke = globalThis.__TAURI__?.core?.invoke;
   if (typeof invoke !== "function") {
     return Promise.reject(new Error("Tauri invoke is unavailable"));
   }
   return invoke(command, payload);
+}
+
+function setDragAnimation(session, state, context) {
+  if (!session.isDragging || session.dragState === state) {
+    return;
+  }
+
+  session.dragState = state;
+  session.dragDecision = behaviorArbiter.setContinuousSignal(DRAG_SIGNAL_KEY, {
+    state,
+    priority: DECISION_PRIORITY.interaction,
+    source: "dragging",
+    reason: context,
+  });
+  applyImmediateBehavior(session.dragDecision, context);
+  diagnosticLog("drag_direction_change", {
+    state,
+    context,
+    screenX: session.lastScreenX,
+    screenY: session.lastScreenY,
+  });
+}
+
+function trackPetDragMotion(session, screenX, screenY) {
+  const totalDx = screenX - session.startScreenX;
+  const totalDy = screenY - session.startScreenY;
+  const stepDx = screenX - session.lastScreenX;
+
+  if (!session.isDragging && Math.hypot(totalDx, totalDy) >= DRAG_THRESHOLD_PX) {
+    session.isDragging = true;
+    clearPendingClickTimer();
+    const initialState = totalDx < 0 ? "running-left" : "running-right";
+    setDragAnimation(session, initialState, "drag_start");
+    diagnosticLog("drag_started", {
+      totalDx,
+      totalDy,
+      state: initialState,
+    });
+  } else if (session.isDragging && stepDx !== 0) {
+    setDragAnimation(
+      session,
+      stepDx < 0 ? "running-left" : "running-right",
+      "drag_direction",
+    );
+  }
+
+  session.lastScreenX = screenX;
+  session.lastScreenY = screenY;
+}
+
+function restoreBehaviorAfterDrag(session) {
+  behaviorArbiter.clearContinuousSignal(DRAG_SIGNAL_KEY);
+  behaviorArbiter.clearLatchedSignal(RANDOM_SIGNAL_KEY);
+  const nextRandomDueAt = rescheduleRandomBehavior();
+  const winner = behaviorArbiter.decide() ?? makeDefaultDecision("drag released");
+  const consumedLatched = behaviorArbiter.consumeDecision(winner);
+
+  applyImmediateBehavior(winner, "drag_release");
+  const nextWinner = submitArbiterDecision();
+  logArbiterWinnerChange(nextWinner, "drag_release");
+  diagnosticLog("drag_finished", {
+    dragState: session.dragState,
+    restoredDecision: compactDecision(winner),
+    consumedLatched,
+    nextArbiterWinner: compactDecision(nextWinner),
+    nextRandomDueAt,
+  });
+}
+
+function finalizeCancelledPointerSession() {
+  behaviorArbiter.clearContinuousSignal(DRAG_SIGNAL_KEY);
+  behaviorArbiter.clearLatchedSignal(RANDOM_SIGNAL_KEY);
+  const nextRandomDueAt = rescheduleRandomBehavior();
+  const winner = submitArbiterDecision();
+  logArbiterWinnerChange(winner, "pointer_cancel");
+  diagnosticLog("pointer_interaction_cancelled", {
+    arbiterWinner: compactDecision(winner),
+    nextRandomDueAt,
+  });
+}
+
+function finalizePetPointerSession(session) {
+  if (dragSession === session) {
+    dragSession = null;
+  }
+
+  if (session.isDragging) {
+    restoreBehaviorAfterDrag(session);
+  } else if (session.cancelled) {
+    finalizeCancelledPointerSession();
+  } else {
+    queuePetClick();
+  }
 }
 
 async function pumpDragUpdates(session) {
@@ -595,9 +837,7 @@ async function pumpDragUpdates(session) {
       console.warn("[screen-partner] window drag end failed", error);
     }
 
-    if (dragSession === session) {
-      dragSession = null;
-    }
+    finalizePetPointerSession(session);
     return;
   }
 
@@ -614,13 +854,21 @@ async function beginPetDrag(event) {
   event.preventDefault();
   const session = {
     pointerId: event.pointerId,
+    startScreenX: event.screenX,
+    startScreenY: event.screenY,
+    lastScreenX: event.screenX,
+    lastScreenY: event.screenY,
+    isDragging: false,
+    dragState: null,
+    dragDecision: null,
+    cancelled: false,
     ready: false,
     pumping: false,
     pendingPoint: null,
     endRequested: false,
   };
   dragSession = session;
-  suppressPendingRandom("drag_start");
+  suppressPendingRandom("pointer_interaction_start");
 
   try {
     spriteElement.setPointerCapture(event.pointerId);
@@ -637,6 +885,7 @@ async function beginPetDrag(event) {
     await pumpDragUpdates(session);
   } catch (error) {
     console.warn("[screen-partner] window drag start failed", error);
+    session.cancelled = true;
     session.endRequested = true;
     session.ready = true;
     await pumpDragUpdates(session);
@@ -650,6 +899,7 @@ function updatePetDrag(event) {
   }
 
   event.preventDefault();
+  trackPetDragMotion(session, event.screenX, event.screenY);
   session.pendingPoint = {
     screenX: event.screenX,
     screenY: event.screenY,
@@ -664,6 +914,8 @@ function endPetDrag(event) {
   }
 
   event.preventDefault();
+  session.cancelled = event.type === "pointercancel";
+  trackPetDragMotion(session, event.screenX, event.screenY);
   session.pendingPoint = {
     screenX: event.screenX,
     screenY: event.screenY,
@@ -679,7 +931,7 @@ function endPetDrag(event) {
   pumpDragUpdates(session);
 }
 
-function installPetDragging() {
+function installPetInteractions() {
   spriteElement.addEventListener("pointerdown", beginPetDrag);
   spriteElement.addEventListener("pointermove", updatePetDrag);
   spriteElement.addEventListener("pointerup", endPetDrag);
@@ -695,6 +947,110 @@ async function developmentUiEnabled() {
     console.warn("[screen-partner] development UI check failed", error);
     return false;
   }
+}
+
+async function loadAppSettings() {
+  const invoke = globalThis.__TAURI__?.core?.invoke;
+  if (typeof invoke !== "function") {
+    return normalizeSettings(null);
+  }
+
+  try {
+    return normalizeSettings(await invoke("get_settings"));
+  } catch (error) {
+    console.warn("[screen-partner] settings load failed", error);
+    return normalizeSettings(null);
+  }
+}
+
+async function openSettingsWindow() {
+  const invoke = globalThis.__TAURI__?.core?.invoke;
+  if (typeof invoke !== "function") {
+    return;
+  }
+
+  try {
+    await invoke("show_settings_window");
+  } catch (error) {
+    console.warn("[screen-partner] settings window failed", error);
+  }
+}
+
+function applyRuntimeSettings(rawSettings, { initial = false } = {}) {
+  const previous = appSettings;
+  const next = normalizeSettings(rawSettings);
+  appSettings = next;
+
+  renderer.setScale(next.desktop.petScale);
+  document.documentElement.style.setProperty(
+    "--pet-scale",
+    String(next.desktop.petScale),
+  );
+
+  if (initial) {
+    resetSystemSignals(
+      next.desktop.systemAwarenessEnabled
+        ? "system awareness initializing"
+        : "system awareness disabled",
+    );
+    if (next.desktop.randomBehaviorEnabled) {
+      randomBehavior.start();
+    } else {
+      randomBehavior.reset();
+    }
+    return;
+  }
+
+  if (
+    previous.desktop.randomBehaviorEnabled !==
+    next.desktop.randomBehaviorEnabled
+  ) {
+    behaviorArbiter.clearLatchedSignal(RANDOM_SIGNAL_KEY);
+    if (next.desktop.randomBehaviorEnabled) {
+      randomBehavior.start();
+    } else {
+      randomBehavior.reset();
+    }
+    const winner = submitArbiterDecision();
+    logArbiterWinnerChange(winner, "settings_random_behavior");
+  }
+
+  if (
+    previous.desktop.systemAwarenessEnabled !==
+    next.desktop.systemAwarenessEnabled
+  ) {
+    resetSystemSignals(
+      next.desktop.systemAwarenessEnabled
+        ? "system awareness re-enabled"
+        : "system awareness disabled",
+    );
+    const winner = submitArbiterDecision();
+    logArbiterWinnerChange(winner, "settings_system_awareness");
+  }
+
+  diagnosticLog("settings_changed", {
+    previous,
+    current: next,
+  });
+}
+
+async function subscribeSettingsChanges() {
+  const listen = globalThis.__TAURI__?.event?.listen;
+  if (typeof listen !== "function") {
+    return;
+  }
+
+  try {
+    unlistenSettings = await listen(SETTINGS_CHANGED_EVENT, (event) => {
+      applyRuntimeSettings(event.payload);
+    });
+  } catch (error) {
+    console.warn("[screen-partner] settings event subscription failed", error);
+  }
+}
+
+async function refreshRuntimeSettings() {
+  applyRuntimeSettings(await loadAppSettings());
 }
 
 function handleActionBoundary({
@@ -720,6 +1076,13 @@ function handleActionBoundary({
 
 async function initialize() {
   try {
+    appSettings = await loadAppSettings();
+    renderer.setScale(appSettings.desktop.petScale);
+    document.documentElement.style.setProperty(
+      "--pet-scale",
+      String(appSettings.desktop.petScale),
+    );
+
     const { pet, spritesheetUrl } = await loadCodexV1Pet(DEFAULT_PET_MANIFEST);
 
     renderer.loadPet(pet, spritesheetUrl);
@@ -735,9 +1098,9 @@ async function initialize() {
       source: "system_default",
       reason: "initial state",
     });
-    randomBehavior.start();
+    applyRuntimeSettings(appSettings, { initial: true });
     showPet();
-    installPetDragging();
+    installPetInteractions();
 
     const devUiEnabled = await developmentUiEnabled();
     if (devUiEnabled) {
@@ -750,6 +1113,7 @@ async function initialize() {
     }
 
     await subscribeSystemMetrics();
+    await subscribeSettingsChanges();
 
     document.addEventListener("visibilitychange", () => {
       diagnosticLog("visibility_change", {
@@ -759,6 +1123,8 @@ async function initialize() {
       });
 
       if (document.visibilityState === "hidden") {
+        clearPendingClickTimer();
+        behaviorArbiter.clearContinuousSignal(DRAG_SIGNAL_KEY);
         const randomCleared = behaviorArbiter.clearLatchedSignal(RANDOM_SIGNAL_KEY);
         randomBehavior.reset();
         if (randomCleared) {
@@ -768,8 +1134,11 @@ async function initialize() {
         animationPlayer?.suspend();
         void flushDiagnosticLog();
       } else {
-        randomBehavior.start();
+        if (appSettings.desktop.randomBehaviorEnabled) {
+          randomBehavior.start();
+        }
         animationPlayer?.resume();
+        void refreshRuntimeSettings();
       }
     });
 
@@ -777,6 +1146,7 @@ async function initialize() {
     diagnosticLog("renderer_ready", {
       petId: pet.id,
       stateCount: PET_STATES.length,
+      settings: appSettings,
       randomBehavior: randomBehavior.getDiagnostics(),
     });
     console.info(
@@ -792,9 +1162,13 @@ window.addEventListener("beforeunload", () => {
     currentBehavior: activeBehavior,
     currentState: animationPlayer?.getSnapshot().currentState ?? null,
     pendingDecision: compactDecision(animationPlayer?.getPendingDecision()),
+    settings: appSettings,
     randomBehavior: randomBehavior.getDiagnostics(),
   });
   void flushDiagnosticLog();
+
+  clearPendingClickTimer();
+  behaviorArbiter.clearContinuousSignal(DRAG_SIGNAL_KEY);
 
   if (diagnosticFlushTimer !== null) {
     clearTimeout(diagnosticFlushTimer);
@@ -808,8 +1182,12 @@ window.addEventListener("beforeunload", () => {
   if (typeof unlistenSystemMetrics === "function") {
     unlistenSystemMetrics();
   }
+  if (typeof unlistenSettings === "function") {
+    unlistenSettings();
+  }
 
   if (dragSession) {
+    dragSession.cancelled = true;
     dragSession.endRequested = true;
     pumpDragUpdates(dragSession);
   }

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the Screen Partner main window",
-  "windows": ["main"],
+  "description": "Capability for Screen Partner desktop windows",
+  "windows": ["main", "settings"],
   "permissions": ["core:default"]
 }
