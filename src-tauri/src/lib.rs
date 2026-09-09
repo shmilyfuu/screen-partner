@@ -9,25 +9,64 @@ use std::{fs, path::PathBuf, sync::Mutex};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, PhysicalPosition, Position, RunEvent, State,
+    Emitter, LogicalSize, Manager, PhysicalPosition, Position, RunEvent, Size, State,
 };
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
-const SETTINGS_SCHEMA_VERSION: u32 = 1;
+const SETTINGS_SCHEMA_VERSION: u32 = 2;
 const DEFAULT_MARGIN_RIGHT: f64 = 48.0;
 const DEFAULT_MARGIN_BOTTOM: f64 = 72.0;
+const BASE_WINDOW_WIDTH: f64 = 240.0;
+const BASE_WINDOW_HEIGHT: f64 = 260.0;
+const PET_SCALE_OPTIONS: [f64; 4] = [0.75, 1.0, 1.25, 1.5];
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct WindowSettings {
     x: i32,
     y: i32,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct DesktopSettings {
+    pet_scale: f64,
+    always_on_top: bool,
+    random_behavior_enabled: bool,
+    system_awareness_enabled: bool,
+    launch_at_startup: bool,
+}
+
+impl Default for DesktopSettings {
+    fn default() -> Self {
+        Self {
+            pet_scale: 1.0,
+            always_on_top: true,
+            random_behavior_enabled: true,
+            system_awareness_enabled: true,
+            launch_at_startup: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct Settings {
     schema_version: u32,
-    window: WindowSettings,
+    #[serde(default)]
+    window: Option<WindowSettings>,
+    #[serde(default)]
+    desktop: DesktopSettings,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            schema_version: SETTINGS_SCHEMA_VERSION,
+            window: None,
+            desktop: DesktopSettings::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -127,9 +166,11 @@ fn end_window_drag(drag_state: State<'_, DragState>) -> Result<(), String> {
 
 fn settings_path(app: &tauri::AppHandle) -> PathBuf {
     #[cfg(windows)]
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            return exe_dir.join("data").join("settings.json");
+    if option_env!("SCREEN_PARTNER_PORTABLE") == Some("1") {
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                return exe_dir.join("data").join("settings.json");
+            }
         }
     }
 
@@ -139,32 +180,71 @@ fn settings_path(app: &tauri::AppHandle) -> PathBuf {
         .join("settings.json")
 }
 
-fn load_window_position(app: &tauri::AppHandle) -> Option<WindowSettings> {
-    let text = fs::read_to_string(settings_path(app)).ok()?;
-    let settings: Settings = serde_json::from_str(&text).ok()?;
-    (settings.schema_version == SETTINGS_SCHEMA_VERSION).then_some(settings.window)
+fn valid_pet_scale(value: f64) -> bool {
+    PET_SCALE_OPTIONS
+        .iter()
+        .any(|candidate| (value - candidate).abs() < f64::EPSILON)
 }
 
-fn save_window_position(app: &tauri::AppHandle, position: WindowSettings) {
-    let path = settings_path(app);
-    let Some(parent) = path.parent() else {
-        return;
-    };
-
-    if fs::create_dir_all(parent).is_err() {
-        return;
+fn parse_settings(text: &str) -> Option<Settings> {
+    let mut settings: Settings = serde_json::from_str(text).ok()?;
+    if settings.schema_version == 0 || settings.schema_version > SETTINGS_SCHEMA_VERSION {
+        return None;
     }
 
-    let settings = Settings {
-        schema_version: SETTINGS_SCHEMA_VERSION,
-        window: position,
-    };
+    settings.schema_version = SETTINGS_SCHEMA_VERSION;
+    if !valid_pet_scale(settings.desktop.pet_scale) {
+        settings.desktop.pet_scale = DesktopSettings::default().pet_scale;
+    }
+    Some(settings)
+}
 
-    let Ok(json) = serde_json::to_string_pretty(&settings) else {
+fn load_settings(app: &tauri::AppHandle) -> Settings {
+    fs::read_to_string(settings_path(app))
+        .ok()
+        .and_then(|text| parse_settings(&text))
+        .unwrap_or_default()
+}
+
+fn write_settings(app: &tauri::AppHandle, settings: &Settings) -> Result<(), String> {
+    let path = settings_path(app);
+    let parent = path
+        .parent()
+        .ok_or_else(|| "settings directory is unavailable".to_string())?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("failed to create settings directory: {error}"))?;
+    let json = serde_json::to_string_pretty(settings)
+        .map_err(|error| format!("failed to serialize settings: {error}"))?;
+    fs::write(&path, format!("{json}\n"))
+        .map_err(|error| format!("failed to write settings: {error}"))
+}
+
+fn settings_with_runtime_state(app: &tauri::AppHandle) -> Settings {
+    let mut settings = load_settings(app);
+    if let Ok(enabled) = app.autolaunch().is_enabled() {
+        settings.desktop.launch_at_startup = enabled;
+    }
+    settings
+}
+
+fn load_window_position(app: &tauri::AppHandle) -> Option<WindowSettings> {
+    load_settings(app).window
+}
+
+fn save_current_main_window_position(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let Ok(position) = window.outer_position() else {
         return;
     };
 
-    let _ = fs::write(path, format!("{json}\n"));
+    let mut settings = load_settings(app);
+    settings.window = Some(WindowSettings {
+        x: position.x,
+        y: position.y,
+    });
+    let _ = write_settings(app, &settings);
 }
 
 fn saved_position_is_visible(window: &tauri::WebviewWindow, position: WindowSettings) -> bool {
@@ -215,6 +295,66 @@ fn default_main_screen_position(window: &tauri::WebviewWindow) -> Option<Physica
     Some(PhysicalPosition::new(x, y))
 }
 
+fn resize_main_window(
+    window: &tauri::WebviewWindow,
+    pet_scale: f64,
+    preserve_bottom_center: bool,
+) -> Result<(), String> {
+    let old_position = preserve_bottom_center.then(|| window.outer_position().ok()).flatten();
+    let old_size = preserve_bottom_center.then(|| window.outer_size().ok()).flatten();
+    let scale_factor = window
+        .scale_factor()
+        .map_err(|error| format!("failed to read window scale factor: {error}"))?;
+
+    window
+        .set_size(Size::Logical(LogicalSize::new(
+            BASE_WINDOW_WIDTH * pet_scale,
+            BASE_WINDOW_HEIGHT * pet_scale,
+        )))
+        .map_err(|error| format!("failed to resize main window: {error}"))?;
+
+    if let (Some(position), Some(size)) = (old_position, old_size) {
+        let target_width = (BASE_WINDOW_WIDTH * pet_scale * scale_factor).round() as i64;
+        let target_height = (BASE_WINDOW_HEIGHT * pet_scale * scale_factor).round() as i64;
+        let anchor_x = position.x as i64 + size.width as i64 / 2;
+        let anchor_y = position.y as i64 + size.height as i64;
+        let target_x = (anchor_x - target_width / 2).clamp(i32::MIN as i64, i32::MAX as i64);
+        let target_y = (anchor_y - target_height).clamp(i32::MIN as i64, i32::MAX as i64);
+        window
+            .set_position(Position::Physical(PhysicalPosition::new(
+                target_x as i32,
+                target_y as i32,
+            )))
+            .map_err(|error| format!("failed to preserve pet position after resize: {error}"))?;
+    }
+
+    Ok(())
+}
+
+fn apply_main_window_desktop_settings(
+    app: &tauri::AppHandle,
+    previous: Option<&DesktopSettings>,
+    desktop: &DesktopSettings,
+    preserve_bottom_center: bool,
+) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("main") else {
+        return Ok(());
+    };
+
+    window
+        .set_always_on_top(desktop.always_on_top)
+        .map_err(|error| format!("failed to update always-on-top: {error}"))?;
+
+    let scale_changed = previous
+        .map(|value| value.pet_scale != desktop.pet_scale)
+        .unwrap_or(true);
+    if scale_changed {
+        resize_main_window(&window, desktop.pet_scale, preserve_bottom_center)?;
+    }
+
+    Ok(())
+}
+
 fn restore_or_place_main_window(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
     if let Some(saved) = load_window_position(app) {
         if saved_position_is_visible(window, saved) {
@@ -229,21 +369,62 @@ fn restore_or_place_main_window(app: &tauri::AppHandle, window: &tauri::WebviewW
     }
 }
 
-fn save_current_main_window_position(app: &tauri::AppHandle) {
-    let Some(window) = app.get_webview_window("main") else {
-        return;
+fn update_autostart(app: &tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let manager = app.autolaunch();
+    let result = if enabled {
+        manager.enable()
+    } else {
+        manager.disable()
     };
-    let Ok(position) = window.outer_position() else {
-        return;
-    };
+    result.map_err(|error| format!("failed to update launch-at-startup: {error}"))
+}
 
-    save_window_position(
-        app,
-        WindowSettings {
-            x: position.x,
-            y: position.y,
-        },
-    );
+fn update_desktop_settings_internal(
+    app: &tauri::AppHandle,
+    desktop: DesktopSettings,
+) -> Result<Settings, String> {
+    if !valid_pet_scale(desktop.pet_scale) {
+        return Err("petScale must be one of 0.75, 1, 1.25, or 1.5".to_string());
+    }
+
+    let previous = load_settings(app);
+    update_autostart(app, desktop.launch_at_startup)?;
+    apply_main_window_desktop_settings(app, Some(&previous.desktop), &desktop, true)?;
+
+    let mut settings = previous;
+    settings.schema_version = SETTINGS_SCHEMA_VERSION;
+    settings.desktop = desktop;
+    if let Some(window) = app.get_webview_window("main") {
+        if let Ok(position) = window.outer_position() {
+            settings.window = Some(WindowSettings {
+                x: position.x,
+                y: position.y,
+            });
+        }
+    }
+
+    write_settings(app, &settings)?;
+    app.emit("settings-changed", settings.clone())
+        .map_err(|error| format!("failed to broadcast settings: {error}"))?;
+    Ok(settings)
+}
+
+#[tauri::command]
+fn get_settings(app: tauri::AppHandle) -> Settings {
+    settings_with_runtime_state(&app)
+}
+
+#[tauri::command]
+fn update_desktop_settings(
+    app: tauri::AppHandle,
+    desktop: DesktopSettings,
+) -> Result<Settings, String> {
+    update_desktop_settings_internal(&app, desktop)
+}
+
+#[tauri::command]
+fn reset_desktop_settings(app: tauri::AppHandle) -> Result<Settings, String> {
+    update_desktop_settings_internal(&app, DesktopSettings::default())
 }
 
 fn show_main_window(app: &tauri::AppHandle) {
@@ -263,14 +444,63 @@ fn recall_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         if let Some(position) = default_main_screen_position(&window) {
             let _ = window.set_position(Position::Physical(position));
+            save_current_main_window_position(app);
         }
         let _ = window.unminimize();
         let _ = window.show();
     }
 }
 
+#[tauri::command]
+fn show_pet(app: tauri::AppHandle) {
+    show_main_window(&app);
+}
+
+#[tauri::command]
+fn hide_pet(app: tauri::AppHandle) {
+    hide_main_window(&app);
+}
+
+#[tauri::command]
+fn recall_pet(app: tauri::AppHandle) {
+    recall_main_window(&app);
+}
+
+fn show_settings_window_internal(app: &tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("settings") {
+        window
+            .show()
+            .map_err(|error| format!("failed to show settings window: {error}"))?;
+        let _ = window.set_focus();
+        return Ok(());
+    }
+
+    let window = tauri::WebviewWindowBuilder::new(
+        app,
+        "settings",
+        tauri::WebviewUrl::App("settings.html".into()),
+    )
+    .title("Screen Partner 设置")
+    .inner_size(500.0, 560.0)
+    .resizable(false)
+    .center()
+    .build()
+    .map_err(|error| format!("failed to create settings window: {error}"))?;
+    let _ = window.set_focus();
+    Ok(())
+}
+
+#[tauri::command]
+async fn show_settings_window(app: tauri::AppHandle) -> Result<(), String> {
+    show_settings_window_internal(&app)
+}
+
 pub fn run() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None,
+        ))
         .manage(DragState::default())
         .invoke_handler(tauri::generate_handler![
             development_ui_enabled,
@@ -278,7 +508,14 @@ pub fn run() {
             diagnostics::append_diagnostic_log,
             begin_window_drag,
             update_window_drag,
-            end_window_drag
+            end_window_drag,
+            get_settings,
+            update_desktop_settings,
+            reset_desktop_settings,
+            show_pet,
+            hide_pet,
+            recall_pet,
+            show_settings_window
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
@@ -286,6 +523,14 @@ pub fn run() {
                 macos_window::allow_unconstrained_top_edge(&window)
                     .map_err(std::io::Error::other)?;
 
+                let settings = load_settings(app.handle());
+                apply_main_window_desktop_settings(
+                    app.handle(),
+                    None,
+                    &settings.desktop,
+                    false,
+                )
+                .map_err(std::io::Error::other)?;
                 restore_or_place_main_window(app.handle(), &window);
                 let _ = window.show();
             }
@@ -295,8 +540,9 @@ pub fn run() {
             let show = MenuItem::with_id(app, "show", "显示宠物", true, None::<&str>)?;
             let hide = MenuItem::with_id(app, "hide", "隐藏宠物", true, None::<&str>)?;
             let recall = MenuItem::with_id(app, "recall", "召回到主屏幕", true, None::<&str>)?;
+            let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出 Screen Partner", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &hide, &recall, &quit])?;
+            let menu = Menu::with_items(app, &[&show, &hide, &recall, &settings, &quit])?;
 
             let mut tray = TrayIconBuilder::with_id("main-tray")
                 .tooltip("Screen Partner")
@@ -306,6 +552,14 @@ pub fn run() {
                     "show" => show_main_window(app),
                     "hide" => hide_main_window(app),
                     "recall" => recall_main_window(app),
+                    "settings" => {
+                        let handle = app.clone();
+                        let _ = std::thread::spawn(move || {
+                            if let Err(error) = show_settings_window_internal(&handle) {
+                                eprintln!("[screen-partner] {error}");
+                            }
+                        });
+                    }
                     "quit" => {
                         save_current_main_window_position(app);
                         app.exit(0);
@@ -338,4 +592,48 @@ pub fn run() {
             save_current_main_window_position(app_handle);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schema_one_settings_migrate_without_losing_window_position() {
+        let settings = parse_settings(
+            r#"{
+              "schemaVersion": 1,
+              "window": {"x": 120, "y": -30}
+            }"#,
+        )
+        .expect("schema 1 settings should migrate");
+
+        assert_eq!(settings.schema_version, SETTINGS_SCHEMA_VERSION);
+        assert_eq!(settings.window, Some(WindowSettings { x: 120, y: -30 }));
+        assert_eq!(settings.desktop, DesktopSettings::default());
+    }
+
+    #[test]
+    fn unsupported_pet_scale_falls_back_to_default_scale() {
+        let settings = parse_settings(
+            r#"{
+              "schemaVersion": 2,
+              "window": null,
+              "desktop": {
+                "petScale": 3.0,
+                "alwaysOnTop": false,
+                "randomBehaviorEnabled": false,
+                "systemAwarenessEnabled": false,
+                "launchAtStartup": true
+              }
+            }"#,
+        )
+        .expect("settings should remain readable");
+
+        assert_eq!(settings.desktop.pet_scale, 1.0);
+        assert!(!settings.desktop.always_on_top);
+        assert!(!settings.desktop.random_behavior_enabled);
+        assert!(!settings.desktop.system_awareness_enabled);
+        assert!(settings.desktop.launch_at_startup);
+    }
 }

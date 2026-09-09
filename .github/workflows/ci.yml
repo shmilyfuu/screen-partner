@@ -79,6 +79,7 @@ jobs:
         shell: pwsh
         env:
           SCREEN_PARTNER_DEV_UI: '1'
+          SCREEN_PARTNER_PORTABLE: '1'
         run: |
           cargo build --manifest-path src-tauri/Cargo.toml --release --target ${{ matrix.target }}
           New-Item -ItemType Directory -Force artifacts/windows | Out-Null
