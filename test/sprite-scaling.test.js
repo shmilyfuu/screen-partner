@@ -9,14 +9,16 @@ function createElement() {
 
 function createPet() {
   return {
+    sourceFormat: "test",
     id: "scale-test",
+    displayName: "Scale Test",
+    spritesheetPath: "./spritesheet.webp",
     frameWidth: 192,
     frameHeight: 208,
     columns: 8,
     rows: 9,
     animations: {
       idle: {
-        loop: true,
         frames: [{ spriteIndex: 9, durationMs: 100 }],
       },
     },
