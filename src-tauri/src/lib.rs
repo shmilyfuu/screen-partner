@@ -300,8 +300,12 @@ fn resize_main_window(
     pet_scale: f64,
     preserve_bottom_center: bool,
 ) -> Result<(), String> {
-    let old_position = preserve_bottom_center.then(|| window.outer_position().ok()).flatten();
-    let old_size = preserve_bottom_center.then(|| window.outer_size().ok()).flatten();
+    let old_position = preserve_bottom_center
+        .then(|| window.outer_position().ok())
+        .flatten();
+    let old_size = preserve_bottom_center
+        .then(|| window.outer_size().ok())
+        .flatten();
     let scale_factor = window
         .scale_factor()
         .map_err(|error| format!("failed to read window scale factor: {error}"))?;
@@ -524,13 +528,8 @@ pub fn run() {
                     .map_err(std::io::Error::other)?;
 
                 let settings = load_settings(app.handle());
-                apply_main_window_desktop_settings(
-                    app.handle(),
-                    None,
-                    &settings.desktop,
-                    false,
-                )
-                .map_err(std::io::Error::other)?;
+                apply_main_window_desktop_settings(app.handle(), None, &settings.desktop, false)
+                    .map_err(std::io::Error::other)?;
                 restore_or_place_main_window(app.handle(), &window);
                 let _ = window.show();
             }
